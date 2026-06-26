@@ -7,6 +7,10 @@ datajoint.json
 venv/
 env/
 
+# uv lockfile — this is a library (submoduled into host envs), not an app;
+# deps resolve against the host, so we don't pin a lockfile.
+uv.lock
+
 # Python
 __pycache__/
 *.py[cod]

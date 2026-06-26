@@ -1,0 +1,34 @@
+[project]
+name = "aeon_raw_compression"
+version = "0.1.0"
+description = "Standalone DataJoint library for lossless compression of raw ephys acquisition files"
+requires-python = ">=3.11"
+dependencies = [
+    # Floor mirrors aeon_mecha (spikeinterface[full]>=0.104.0); the validated
+    # compression testing ran on 0.104.x. Not an exact == pin: this library is
+    # submoduled alongside aeon_mecha and an exact pin risks resolution
+    # conflicts. Codec stability is guaranteed by the explicit Blosc compressor
+    # in compression.py, not by the SI version.
+    "spikeinterface>=0.104.0",
+    "datajoint==2.2.2",
+    "zarr",
+    "numcodecs",
+    "cryptography",
+    "numpy",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aeon_raw_compression"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: requires aeondj + real data; run on the HPC, not locally",
+]
+testpaths = ["tests"]
