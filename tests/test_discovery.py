@@ -1,0 +1,103 @@
+"""Unit tests for aeon_raw_compression.discovery.
+
+Completeness (successor rule + final-chunk epoch-finished/quiescent guard),
+scoping, dedup, and probe-param population. ``is_epoch_finished`` and
+``is_quiescent`` are injected so the tests are deterministic (no clock waits).
+"""
+
+from aeon_raw_compression.discovery import RawFileRecord, discover_raw_files
+from tests.fixtures.synthetic_ephys import make_epoch
+
+_ALWAYS = lambda *_: True
+_NEVER = lambda *_: False
+
+
+def test_unfinished_epoch_skips_final_chunk(tmp_path):
+    make_epoch(
+        tmp_path, "AEONX1/exp", "2026-05-11T07-50-11", "NeuropixelsV2",
+        ["ProbeA"], n_chunks=3, finished=False,
+    )
+    recs = discover_raw_files(
+        tmp_path / "AEONX1/exp", is_epoch_finished=_NEVER, is_quiescent=_ALWAYS,
+    )
+    names = sorted(r.file_name for r in recs)
+    assert names == [
+        "NeuropixelsV2_ProbeA_AmplifierData_0.bin",
+        "NeuropixelsV2_ProbeA_AmplifierData_1.bin",
+    ]  # _2 is the final chunk; excluded because the epoch is not finished
+
+
+def test_includes_final_chunk_when_finished_and_quiescent(tmp_path):
+    make_epoch(
+        tmp_path, "AEONX1/exp", "2026-05-11T07-50-11", "NeuropixelsV2",
+        ["ProbeA"], n_chunks=3, finished=True,
+    )
+    recs = discover_raw_files(
+        tmp_path / "AEONX1/exp", is_epoch_finished=_ALWAYS, is_quiescent=_ALWAYS,
+    )
+    names = sorted(r.file_name for r in recs)
+    assert len(names) == 3
+    assert names[-1] == "NeuropixelsV2_ProbeA_AmplifierData_2.bin"
+
+
+def test_excludes_final_chunk_when_not_quiescent(tmp_path):
+    make_epoch(
+        tmp_path, "AEONX1/exp", "e", "NeuropixelsV2", ["ProbeA"],
+        n_chunks=2, finished=True,
+    )
+    recs = discover_raw_files(
+        tmp_path / "AEONX1/exp", is_epoch_finished=_ALWAYS, is_quiescent=_NEVER,
+    )
+    names = sorted(r.file_name for r in recs)
+    assert names == ["NeuropixelsV2_ProbeA_AmplifierData_0.bin"]  # _1 final, not quiescent
+
+
+def test_dedup_against_already_registered(tmp_path):
+    make_epoch(
+        tmp_path, "AEONX1/exp", "e", "NeuropixelsV2", ["ProbeA"],
+        n_chunks=3, finished=True,
+    )
+    recs = discover_raw_files(
+        tmp_path / "AEONX1/exp", is_epoch_finished=_ALWAYS, is_quiescent=_ALWAYS,
+    )
+    seen = {recs[0].file_path}
+    recs2 = discover_raw_files(
+        tmp_path / "AEONX1/exp", already_registered=seen,
+        is_epoch_finished=_ALWAYS, is_quiescent=_ALWAYS,
+    )
+    assert recs[0].file_path not in {r.file_path for r in recs2}
+    assert len(recs2) == len(recs) - 1
+
+
+def test_scoping_to_epoch_path(tmp_path):
+    make_epoch(
+        tmp_path, "AEONX1/exp", "epoch-1", "NeuropixelsV2", ["ProbeA"],
+        n_chunks=2, finished=True,
+    )
+    make_epoch(
+        tmp_path, "AEONX1/exp", "epoch-2", "NeuropixelsV2", ["ProbeA"],
+        n_chunks=2, finished=True,
+    )
+    recs = discover_raw_files(
+        tmp_path / "AEONX1/exp", epoch_path="epoch-1",
+        is_epoch_finished=_ALWAYS, is_quiescent=_ALWAYS,
+    )
+    assert {r.epoch_dir for r in recs} == {"epoch-1"}
+
+
+def test_records_carry_probe_params(tmp_path):
+    make_epoch(
+        tmp_path, "AEONX1/exp", "e", "NeuropixelsV2", ["ProbeA"],
+        n_chunks=2, n_channels=8, finished=True,
+    )
+    recs = discover_raw_files(
+        tmp_path / "AEONX1/exp", is_epoch_finished=_ALWAYS, is_quiescent=_ALWAYS,
+    )
+    assert recs and all(isinstance(r, RawFileRecord) for r in recs)
+    r = recs[0]
+    assert r.num_channels == 8
+    assert r.sampling_frequency == 30000.0
+    assert r.device_name == "NeuropixelsV2"
+    assert r.probe_label == "ProbeA"
+    assert r.file_size_bytes > 0
+    assert r.experiment_path  # populated
