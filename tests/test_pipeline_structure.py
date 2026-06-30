@@ -30,3 +30,12 @@ def test_import_is_db_free():
     # Importing succeeded above with no datajoint.json / .secrets present, which
     # proves no connection was opened. The deferred schema must not be activated.
     assert pipeline.schema.is_activated() is False
+
+
+def test_schema_name_has_single_separator():
+    # Project prefixes end in "_"; the schema name must not double the underscore.
+    assert (
+        pipeline._schema_name("u_elissas_aeon_ephys_v2_test_")
+        == "u_elissas_aeon_ephys_v2_test_aeon_raw_compression"
+    )
+    assert pipeline._schema_name("test_rawcomp") == "test_rawcomp_aeon_raw_compression"

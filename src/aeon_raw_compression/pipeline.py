@@ -234,10 +234,20 @@ def activate(prefix=None, *, raw_data_root=None, create_schema=True, create_tabl
     if prefix is None:
         prefix = dj.config.database.database_prefix
     schema.activate(
-        f"{prefix}_aeon_raw_compression",
+        _schema_name(prefix),
         create_schema=create_schema,
         create_tables=create_tables,
     )
+
+
+def _schema_name(prefix: str) -> str:
+    """Schema name from a DataJoint prefix, with exactly one separating ``_``.
+
+    Project prefixes conventionally end in ``_`` (e.g.
+    ``u_elissas_aeon_ephys_v2_test_``); naive concatenation would double the
+    underscore. Strip any trailing ``_`` then append ``_aeon_raw_compression``.
+    """
+    return f"{prefix.rstrip('_')}_aeon_raw_compression"
 
 
 def _resolve_experiment_dir(experiment_path):

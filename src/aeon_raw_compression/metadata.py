@@ -47,6 +47,11 @@ _DEVICE_KEY_CANDIDATES = {
 _NUM_CHANNELS_FIELD = "NumberOfChannels"
 _SAMPLING_FREQUENCY_FIELD = "SamplingFrequency"
 
+# Real Bonsai Metadata.yml stores the sampling rate at the TOP LEVEL as
+# "SampleRate" (a string, e.g. "30000"), not inside ConfigurationA/B. Confirmed
+# on the abcGolden01 golden data (2026-06-29).
+_TOP_LEVEL_SAMPLE_RATE_FIELD = "SampleRate"
+
 
 @dataclass(frozen=True)
 class ProbeParams:
@@ -81,10 +86,28 @@ def read_probe_params(metadata_path, device_name: str, probe_label: str) -> Prob
     config = _select_config(devices[device_key], probe_label)
 
     num_channels = int(config.get(_NUM_CHANNELS_FIELD, NP2_NUM_CHANNELS))
-    sampling_frequency = float(
-        config.get(_SAMPLING_FREQUENCY_FIELD, NP2_SAMPLING_FREQUENCY)
-    )
+    sampling_frequency = _resolve_sampling_frequency(meta, config)
     return ProbeParams(num_channels=num_channels, sampling_frequency=sampling_frequency)
+
+
+def _resolve_sampling_frequency(meta: dict, config: dict) -> float:
+    """Sampling rate: ConfigurationA/B override -> top-level SampleRate -> NP2 const."""
+    raw = config.get(_SAMPLING_FREQUENCY_FIELD) or meta.get(_TOP_LEVEL_SAMPLE_RATE_FIELD)
+    return float(raw) if raw is not None else NP2_SAMPLING_FREQUENCY
+
+
+def probe_enabled(metadata_path, probe_label: str) -> bool:
+    """Whether a probe is enabled in Metadata.yml.
+
+    Bonsai records per-probe enable flags at ``Devices[<probe_label>]`` as the
+    STRING ``"true"``/``"false"`` (e.g. ProbeA is a disabled SpoofProbe on the
+    golden data). Absent flag -> assume enabled.
+    """
+    meta = json.loads(Path(metadata_path).read_text())
+    flag = meta.get("Devices", {}).get(probe_label)
+    if flag is None:
+        return True
+    return str(flag).strip().lower() != "false"
 
 
 def _resolve_device_key(devices: dict, device_name: str) -> str:

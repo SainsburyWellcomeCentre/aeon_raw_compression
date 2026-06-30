@@ -5,6 +5,8 @@ scoping, dedup, and probe-param population. ``is_epoch_finished`` and
 ``is_quiescent`` are injected so the tests are deterministic (no clock waits).
 """
 
+import json
+
 from aeon_raw_compression.discovery import RawFileRecord, discover_raw_files
 from tests.fixtures.synthetic_ephys import make_epoch
 
@@ -101,3 +103,49 @@ def test_records_carry_probe_params(tmp_path):
     assert r.probe_label == "ProbeA"
     assert r.file_size_bytes > 0
     assert r.experiment_path  # populated
+
+
+def test_disabled_probe_is_skipped(tmp_path):
+    # ProbeA flagged disabled in Metadata.yml (a SpoofProbe) -> never registered.
+    make_epoch(
+        tmp_path, "AEONX1/exp", "2026-05-11T07-50-11", "NeuropixelsV2",
+        ["ProbeA"], n_chunks=3, finished=True, n_channels=8,
+    )
+    meta_path = tmp_path / "AEONX1/exp" / "2026-05-11T07-50-11" / "Metadata.yml"
+    meta = json.loads(meta_path.read_text())
+    meta["Devices"]["ProbeA"] = "false"
+    meta_path.write_text(json.dumps(meta))
+
+    recs = discover_raw_files(
+        tmp_path / "AEONX1/exp", is_epoch_finished=_ALWAYS, is_quiescent=_ALWAYS,
+    )
+    assert recs == []
+
+
+def test_default_epoch_finished_ignores_non_timestamp_sibling(tmp_path):
+    # A non-timestamp sibling (like golden_test_sorting) must NOT mark the epoch
+    # finished, so the final chunk stays excluded under the default detector.
+    exp = make_epoch(
+        tmp_path, "AEONX1/exp", "2026-05-11T07-50-11", "NeuropixelsV2",
+        ["ProbeA"], n_chunks=2, finished=False, n_channels=8,
+    )
+    (exp / "golden_test_sorting").mkdir()
+
+    recs = discover_raw_files(exp, is_quiescent=_ALWAYS)  # default is_epoch_finished
+    names = sorted(r.file_name for r in recs)
+    assert names == ["NeuropixelsV2_ProbeA_AmplifierData_0.bin"]  # _1 (final) excluded
+
+
+def test_default_epoch_finished_accepts_newer_timestamp_sibling(tmp_path):
+    exp = make_epoch(
+        tmp_path, "AEONX1/exp", "2026-05-11T07-50-11", "NeuropixelsV2",
+        ["ProbeA"], n_chunks=2, finished=False, n_channels=8,
+    )
+    (exp / "2026-05-12T07-50-11").mkdir()  # a genuinely newer epoch dir
+
+    recs = discover_raw_files(exp, is_quiescent=_ALWAYS)  # default is_epoch_finished
+    names = sorted(r.file_name for r in recs)
+    assert names == [
+        "NeuropixelsV2_ProbeA_AmplifierData_0.bin",
+        "NeuropixelsV2_ProbeA_AmplifierData_1.bin",  # final chunk now included
+    ]

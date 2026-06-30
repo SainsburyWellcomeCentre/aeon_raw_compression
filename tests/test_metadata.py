@@ -13,6 +13,7 @@ from aeon_raw_compression.metadata import (
     NP2_NUM_CHANNELS,
     NP2_SAMPLING_FREQUENCY,
     ProbeParams,
+    probe_enabled,
     read_probe_params,
 )
 from tests.fixtures.synthetic_ephys import write_metadata
@@ -69,3 +70,42 @@ def test_missing_device_raises(tmp_path):
         read_probe_params(
             tmp_path / "Metadata.yml", device_name="NeuropixelsV2", probe_label="ProbeA"
         )
+
+
+def test_reads_top_level_sample_rate_when_config_has_none(tmp_path):
+    # Real Bonsai layout: no SamplingFrequency in ConfigurationA/B, but a
+    # top-level "SampleRate" string. That wins over the NP2 constant.
+    write_metadata(tmp_path)
+    meta_path = tmp_path / "Metadata.yml"
+    meta = json.loads(meta_path.read_text())
+    meta["SampleRate"] = "30000"
+    meta_path.write_text(json.dumps(meta))
+
+    params = read_probe_params(
+        meta_path, device_name="NeuropixelsV2", probe_label="ProbeA"
+    )
+    assert params.sampling_frequency == 30000.0
+
+
+def test_config_sampling_frequency_overrides_top_level(tmp_path):
+    write_metadata(tmp_path, sampling_frequency=25000)
+    meta_path = tmp_path / "Metadata.yml"
+    meta = json.loads(meta_path.read_text())
+    meta["SampleRate"] = "30000"  # top-level present, but config wins
+    meta_path.write_text(json.dumps(meta))
+
+    params = read_probe_params(
+        meta_path, device_name="NeuropixelsV2", probe_label="ProbeA"
+    )
+    assert params.sampling_frequency == 25000.0
+
+
+def test_probe_enabled_reads_string_flag(tmp_path):
+    meta_path = tmp_path / "Metadata.yml"
+    meta_path.write_text(
+        json.dumps({"Devices": {"ProbeA": "false", "ProbeB": "true"}})
+    )
+    assert probe_enabled(meta_path, "ProbeB") is True
+    assert probe_enabled(meta_path, "ProbeA") is False
+    # Absent flag -> assume enabled.
+    assert probe_enabled(meta_path, "ProbeC") is True

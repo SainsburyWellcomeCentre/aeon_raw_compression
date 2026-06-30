@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from aeon_raw_compression.metadata import read_probe_params
+from aeon_raw_compression.metadata import probe_enabled, read_probe_params
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,11 @@ DEFAULT_QUIESCENCE_THRESHOLD_S = 30 * 60
 
 # "{device}_{Probe}_AmplifierData_{N}.bin" -> (probe_label, chunk_number)
 _AMPLIFIER_RE = re.compile(r"_(Probe[A-Z])_AmplifierData_(\d+)\.bin$")
+
+# Epoch directories are ISO timestamps, e.g. "2026-05-11T07-50-11". Used to
+# decide which sibling dirs count when inferring whether an epoch is finished
+# (a non-timestamp sibling like "golden_test_sorting" must not count).
+_EPOCH_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}")
 
 
 @dataclass(frozen=True)
@@ -116,6 +121,7 @@ def discover_raw_files(
 
     records: list[RawFileRecord] = []
     params_cache: dict[tuple[str, str, str], object] = {}
+    enabled_cache: dict[tuple[str, str], bool] = {}
     for f in amp_files:
         if f not in parsed:
             continue
@@ -128,6 +134,15 @@ def discover_raw_files(
             continue
         epoch_dir = rel_parts[0]
         device_name = rel_parts[-2]
+        metadata_path = experiment_dir / epoch_dir / "Metadata.yml"
+
+        # Skip probes flagged disabled in Metadata.yml (e.g. ProbeA SpoofProbe).
+        enabled_key = (epoch_dir, probe_label)
+        if enabled_key not in enabled_cache:
+            enabled_cache[enabled_key] = probe_enabled(metadata_path, probe_label)
+        if not enabled_cache[enabled_key]:
+            on_anomaly(f"Skipping {f.name}: probe {probe_label} is disabled in Metadata.yml")
+            continue
 
         file_path = f.resolve().as_posix()
         if file_path in already:
@@ -141,7 +156,6 @@ def discover_raw_files(
 
         cache_key = (epoch_dir, device_name, probe_label)
         if cache_key not in params_cache:
-            metadata_path = experiment_dir / epoch_dir / "Metadata.yml"
             params_cache[cache_key] = read_probe_params(
                 metadata_path, device_name, probe_label
             )
@@ -196,10 +210,21 @@ def _default_is_quiescent(file, *, threshold_s=DEFAULT_QUIESCENCE_THRESHOLD_S):
 
 
 def _default_is_epoch_finished(epoch_dir):
-    """Finished if a newer sibling epoch directory (later name) exists."""
+    """Finished if a newer sibling *epoch* directory (later ISO timestamp) exists.
+
+    Only ISO-timestamp-looking siblings count -- otherwise an unrelated sibling
+    such as ``golden_test_sorting`` (which sorts lexically after the timestamp)
+    would falsely mark the epoch finished.
+    """
     epoch_dir = Path(epoch_dir)
+    if not _EPOCH_DIR_RE.match(epoch_dir.name):
+        return False  # not a recognizable epoch dir -- don't guess
     try:
-        siblings = [p.name for p in epoch_dir.parent.iterdir() if p.is_dir()]
+        siblings = [
+            p.name
+            for p in epoch_dir.parent.iterdir()
+            if p.is_dir() and _EPOCH_DIR_RE.match(p.name)
+        ]
     except OSError:
         return False
     return any(name > epoch_dir.name for name in siblings)
