@@ -675,9 +675,8 @@ Test coverage:
 
 ## Decided (from review + the 2026-06-18 meeting)
 
-- **Repo home:** `aeon_raw_compression` in the SainsburyWellcomeCentre org,
-  starting **private** (made public later, once team-approved). Remote not yet
-  created.
+- **Repo home:** `aeon_raw_compression` in the SainsburyWellcomeCentre org, as a
+  **public** repo (team-approved). Remote not yet created.
 - **Execution model:** standalone library, per-user submodule first;
   centralized DB-server cron a later option. v1 stores its tables under each
   project's own prefix on `aeondj` (per-project tracking); a shared/central
