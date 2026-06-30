@@ -76,6 +76,19 @@ or have the job re-submit itself at the end with
 `sbatch --begin=now+1day templates/nightly_compress.sbatch`. See the comments
 in the template for the `n_jobs` / `os.cpu_count()` SLURM trap.
 
+### Tuning the final-chunk guard
+
+Discovery registers a recording's final (highest-numbered) chunk only once the
+epoch is finished and the file is quiescent. Two env vars tune that guard (the
+spec's `tune-on-ceph` open question); both default conservatively:
+
+- `AEON_RAW_COMPRESSION_QUIESCENCE_S` — how long a file's size/mtime must be
+  stable before it counts as quiescent. Default `1800` (30 min).
+- `AEON_RAW_COMPRESSION_EPOCH_MAX_AGE_S` — for the rig's *last* epoch (which
+  never gets a newer sibling epoch directory), how long the epoch must be
+  completely stable before it counts as finished. Default `21600` (6 h).
+  Without this fallback the last epoch's final chunk would never register.
+
 ## Storage permissions (read this before enabling deletion)
 
 Two operations need **write/delete** access to the raw ephys store:

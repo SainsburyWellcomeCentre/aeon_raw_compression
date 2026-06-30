@@ -23,6 +23,7 @@ Path layout (mirrors aeon_mecha): ``experiment_dir / epoch_dir / device_name /
 """
 
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -34,8 +35,19 @@ logger = logging.getLogger(__name__)
 
 # Quiescence threshold for the final-chunk guard. Conservative -- well over one
 # chunk's wall-clock duration, because the writer holds the handle open for the
-# whole chunk and Ceph may not flush mtime promptly. TODO(tune-on-ceph).
-DEFAULT_QUIESCENCE_THRESHOLD_S = 30 * 60
+# whole chunk and Ceph may not flush mtime promptly. Env-overridable for tuning
+# on Ceph (the spec's tune-on-ceph open question).
+DEFAULT_QUIESCENCE_THRESHOLD_S = int(
+    os.environ.get("AEON_RAW_COMPRESSION_QUIESCENCE_S", 30 * 60)
+)
+
+# How long an epoch with NO newer sibling must be completely stable before it
+# counts as finished. Covers the rig's last epoch, which never gets a newer
+# sibling -- without this its final chunk would never register. Must be
+# comfortably longer than one chunk's duration. Env-overridable.
+DEFAULT_EPOCH_FINISHED_MAX_AGE_S = int(
+    os.environ.get("AEON_RAW_COMPRESSION_EPOCH_MAX_AGE_S", 6 * 3600)
+)
 
 # "{device}_{Probe}_AmplifierData_{N}.bin" -> (probe_label, chunk_number)
 _AMPLIFIER_RE = re.compile(r"_(Probe[A-Z])_AmplifierData_(\d+)\.bin$")
@@ -213,12 +225,18 @@ def _default_is_quiescent(file, *, threshold_s=DEFAULT_QUIESCENCE_THRESHOLD_S):
     return (time.time() - mtime) >= threshold_s
 
 
-def _default_is_epoch_finished(epoch_dir):
-    """Finished if a newer sibling *epoch* directory (later ISO timestamp) exists.
+def _default_is_epoch_finished(epoch_dir, *, max_age_s=DEFAULT_EPOCH_FINISHED_MAX_AGE_S):
+    """Finished if a newer sibling epoch dir exists, OR (no newer sibling) the
+    epoch has been completely stable for ``max_age_s``.
 
-    Only ISO-timestamp-looking siblings count -- otherwise an unrelated sibling
-    such as ``golden_test_sorting`` (which sorts lexically after the timestamp)
-    would falsely mark the epoch finished.
+    The newer-sibling signal (later ISO timestamp) handles every epoch except the
+    most recent one. Only ISO-timestamp-looking siblings count -- otherwise an
+    unrelated sibling such as ``golden_test_sorting`` (which sorts lexically after
+    the timestamp) would falsely mark the epoch finished.
+
+    The max-age fallback covers the rig's last epoch, whose final chunk has no
+    successor and no newer sibling, so it would otherwise never register. Once
+    nothing under the epoch has changed for ``max_age_s`` it is treated as done.
     """
     epoch_dir = Path(epoch_dir)
     if not _EPOCH_DIR_RE.match(epoch_dir.name):
@@ -231,4 +249,14 @@ def _default_is_epoch_finished(epoch_dir):
         ]
     except OSError:
         return False
-    return any(name > epoch_dir.name for name in siblings)
+    if any(name > epoch_dir.name for name in siblings):
+        return True
+    # No newer epoch (e.g. the rig's last recording): finished only once nothing
+    # under it has changed for a long time.
+    try:
+        mtimes = [p.stat().st_mtime for p in epoch_dir.rglob("*")]
+    except OSError:
+        return False
+    if not mtimes:
+        return False
+    return (time.time() - max(mtimes)) >= max_age_s

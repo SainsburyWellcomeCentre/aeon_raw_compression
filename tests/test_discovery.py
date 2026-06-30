@@ -6,6 +6,8 @@ scoping, dedup, and probe-param population. ``is_epoch_finished`` and
 """
 
 import json
+import os
+import time
 
 import pytest
 
@@ -156,6 +158,38 @@ def test_default_epoch_finished_accepts_newer_timestamp_sibling(tmp_path):
         "NeuropixelsV2_ProbeA_AmplifierData_0.bin",
         "NeuropixelsV2_ProbeA_AmplifierData_1.bin",  # final chunk now included
     ]
+
+
+def test_default_epoch_finished_via_old_mtime_no_newer_sibling(tmp_path):
+    # The rig's LAST epoch: no newer sibling exists, but everything under it has
+    # been stable for hours -> the final chunk must eventually register.
+    exp = make_epoch(
+        tmp_path, "AEONX1/exp", "2026-05-11T07-50-11", "NeuropixelsV2",
+        ["ProbeA"], n_chunks=2, finished=False, n_channels=8,
+    )
+    epoch_dir = exp / "2026-05-11T07-50-11"
+    old = time.time() - (10 * 3600)  # 10h ago: past both thresholds
+    for p in list(epoch_dir.rglob("*")) + [epoch_dir]:
+        os.utime(p, (old, old))
+
+    recs = discover_raw_files(exp)  # default detectors only
+    names = sorted(r.file_name for r in recs)
+    assert names == [
+        "NeuropixelsV2_ProbeA_AmplifierData_0.bin",
+        "NeuropixelsV2_ProbeA_AmplifierData_1.bin",  # final chunk included via max-age
+    ]
+
+
+def test_recent_last_epoch_still_holds_back_final_chunk(tmp_path):
+    # Same shape but freshly written (not old): no newer sibling, not yet aged
+    # out -> final chunk still excluded (must not compress a possibly-open file).
+    exp = make_epoch(
+        tmp_path, "AEONX1/exp", "2026-05-11T07-50-11", "NeuropixelsV2",
+        ["ProbeA"], n_chunks=2, finished=False, n_channels=8,
+    )
+    recs = discover_raw_files(exp)  # default detectors; files are brand new
+    names = sorted(r.file_name for r in recs)
+    assert names == ["NeuropixelsV2_ProbeA_AmplifierData_0.bin"]
 
 
 def test_file_path_is_not_symlink_resolved(tmp_path):
