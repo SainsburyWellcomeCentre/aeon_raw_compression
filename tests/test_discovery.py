@@ -12,8 +12,13 @@ import pytest
 from aeon_raw_compression.discovery import RawFileRecord, discover_raw_files
 from tests.fixtures.synthetic_ephys import make_epoch
 
-_ALWAYS = lambda *_: True
-_NEVER = lambda *_: False
+
+def _ALWAYS(*_):
+    return True
+
+
+def _NEVER(*_):
+    return False
 
 
 def test_unfinished_epoch_skips_final_chunk(tmp_path):
