@@ -80,9 +80,9 @@ class RawEphysDiscovery(dj.Imported):
         device_name        : varchar(64)
         probe_label        : varchar(32)
         file_name          : varchar(128)
-        file_size_bytes    : bigint
+        file_size_bytes    : int64
         num_channels       : int32
-        sampling_frequency : float
+        sampling_frequency : float64
         unique index (file_path)        # one row per physical file across all triggers
         """
 
@@ -132,13 +132,13 @@ class CompressedFile(dj.Computed):
     -> RawEphysDiscovery.RawEphysFile
     ---
     zarr_path             : varchar(512)  # zarr directory on Ceph (same stem as .bin)
-    compressed_size_bytes : bigint
-    compression_ratio     : float         # original / compressed
-    compression_time_s    : float
-    decompression_time_s  : float
+    compressed_size_bytes : int64
+    compression_ratio     : float64       # original / compressed
+    compression_time_s    : float64
+    decompression_time_s  : float64
     codec_name            : varchar(64)   # e.g. "blosc-zstd-5-bitshuffle"
     checksum_match        : bool          # True for every inserted row
-    num_samples           : bigint
+    num_samples           : int64
     execution_time        : datetime
     """
 
