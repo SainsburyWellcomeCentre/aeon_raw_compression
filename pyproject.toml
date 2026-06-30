@@ -11,8 +11,12 @@ dependencies = [
     # in compression.py, not by the SI version.
     "spikeinterface>=0.104.0",
     "datajoint==2.2.2",
-    "zarr",
-    "numcodecs",
+    # zarr/numcodecs are bounded to match SpikeInterface 0.104.x's own caps
+    # (zarr<3, numcodecs<0.16). The on-disk archive format is zarr-2; zarr 3 is
+    # a breaking format/API change. SI enforces this transitively today, but the
+    # spikeinterface floor has no ceiling, so pin it here too.
+    "zarr>=2.18,<3",
+    "numcodecs<0.16",
     "cryptography",
     "numpy",
 ]
