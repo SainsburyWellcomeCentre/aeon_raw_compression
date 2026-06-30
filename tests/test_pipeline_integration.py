@@ -179,6 +179,37 @@ def test_deletion_refuses_while_disabled(activated_schema, tmp_path):
         pipeline.OriginalDeletion().make(key)
 
 
+def test_failed_verification_inserts_no_row_and_removes_zarr(
+    activated_schema, tmp_path, monkeypatch
+):
+    import datetime
+    from pathlib import Path
+
+    from aeon_raw_compression import compression
+
+    experiment_dir = make_epoch(
+        tmp_path, "AEONX1/intexp_failverify", "2026-05-11T13-00-00", "NeuropixelsV2",
+        ["ProbeA"], n_chunks=3, finished=True, n_channels=8,
+    )
+    placed_by = "failv_user"
+    _place_trigger(experiment_dir, placed_by, datetime.datetime(2026, 6, 26, 6, 0, 0))
+    pipeline.RawEphysDiscovery.populate({"placed_by": placed_by})
+
+    def _boom(*a, **k):
+        raise compression.VerificationError("forced failure for test")
+
+    # pipeline.py imports verify_roundtrip by name, so patch it on the pipeline
+    # module (that is the bound reference make() calls).
+    monkeypatch.setattr(pipeline, "verify_roundtrip", _boom)
+
+    # Errors are suppressed -> populate returns, but no row should be inserted.
+    pipeline.CompressedFile.populate({"placed_by": placed_by}, suppress_errors=True)
+
+    assert len(pipeline.CompressedFile & {"placed_by": placed_by}) == 0
+    # The untrusted zarr must have been removed so a retry starts clean.
+    assert list(Path(experiment_dir).rglob("*.zarr")) == []
+
+
 @pytest.mark.skipif(
     not os.environ.get("AEON_GOLDEN_CHUNK"),
     reason="set AEON_GOLDEN_CHUNK to a real *_AmplifierData_*.bin to run this",
