@@ -18,6 +18,7 @@ and would break the byte-for-byte guarantee that is the point of a verified raw
 archive.
 """
 
+import hashlib
 import os
 import shutil
 import time
@@ -40,6 +41,9 @@ DEFAULT_N_JOBS = int(os.environ.get("AEON_RAW_COMPRESSION_N_JOBS", "1"))
 # keep overhead low, small enough that a 30 GB chunk never loads at once.
 _VERIFY_CHUNK_SAMPLES = 100_000
 
+# Sequential read size for hashing the original .bin (memory-bounded).
+_HASH_READ_BYTES = 64 * 1024 * 1024  # 64 MiB
+
 
 class VerificationError(Exception):
     """Raised when the zarr round-trip does not match the original byte-for-byte."""
@@ -53,6 +57,7 @@ class CompressionResult:
     compression_time_s: float
     codec_name: str
     num_samples: int
+    content_hash: str  # sha256 hex of the original .bin bytes (durable digest)
 
 
 @dataclass(frozen=True)
@@ -110,6 +115,12 @@ def compress_to_zarr(
     original_size = bin_path.stat().st_size
     ratio = original_size / compressed_size if compressed_size else 0.0
 
+    # Durable digest of the original bytes: lets a future tool confirm a .zarr
+    # still decodes to the original even after the original is deleted, without
+    # needing the original present. One extra sequential read, cheap vs the SI
+    # read+write above.
+    content_hash = _sha256_of_file(bin_path)
+
     return CompressionResult(
         zarr_path=zarr_path.resolve().as_posix(),
         compressed_size_bytes=compressed_size,
@@ -117,6 +128,7 @@ def compress_to_zarr(
         compression_time_s=compression_time_s,
         codec_name=CODEC_NAME,
         num_samples=num_samples,
+        content_hash=content_hash,
     )
 
 
@@ -168,3 +180,11 @@ def verify_roundtrip(
 
 def _directory_size(path) -> int:
     return sum(p.stat().st_size for p in Path(path).rglob("*") if p.is_file())
+
+
+def _sha256_of_file(path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(_HASH_READ_BYTES), b""):
+            h.update(block)
+    return h.hexdigest()

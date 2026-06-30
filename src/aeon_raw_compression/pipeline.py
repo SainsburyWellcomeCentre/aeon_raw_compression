@@ -155,7 +155,8 @@ class CompressedFile(dj.Computed):
     compression_time_s    : float64
     decompression_time_s  : float64
     codec_name            : varchar(64)   # e.g. "blosc-zstd-5-bitshuffle"
-    checksum_match        : bool          # True for every inserted row
+    checksum_match        : bool          # round-trip compare result (True for every row)
+    content_hash          : char(64)      # sha256 hex of the original .bin bytes (durable digest)
     num_samples           : int64
     execution_time        : datetime
     """
@@ -189,6 +190,7 @@ class CompressedFile(dj.Computed):
                 "decompression_time_s": verification.decompression_time_s,
                 "codec_name": result.codec_name,
                 "checksum_match": verification.checksum_match,
+                "content_hash": result.content_hash,
                 "num_samples": verification.num_samples,
                 "execution_time": datetime.datetime.now(),
             }

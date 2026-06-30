@@ -43,6 +43,19 @@ def test_roundtrip_is_lossless(tmp_path):
     assert v.checksum_match is True
 
 
+def test_compress_records_sha256_of_original(tmp_path):
+    import hashlib
+
+    b = tmp_path / "Dev_ProbeA_AmplifierData_0.bin"
+    _write_bin(b)
+    z = tmp_path / "Dev_ProbeA_AmplifierData_0.zarr"
+
+    res = compress_to_zarr(b, z, num_channels=8, sampling_frequency=30000)
+    expected = hashlib.sha256(b.read_bytes()).hexdigest()
+    assert res.content_hash == expected
+    assert len(res.content_hash) == 64
+
+
 def test_verify_detects_data_mismatch(tmp_path):
     b = tmp_path / "Dev_ProbeA_AmplifierData_0.bin"
     data = _write_bin(b)
