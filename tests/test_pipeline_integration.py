@@ -138,6 +138,28 @@ def test_overlapping_triggers_do_not_double_register(activated_schema, tmp_path)
     assert len(paths) == len(set(paths))  # no duplicate physical files
 
 
+def test_discovery_persists_anomalies(activated_schema, tmp_path):
+    import datetime
+
+    experiment_dir = make_epoch(
+        tmp_path, "AEONX1/intexp_anom", "2026-05-11T12-30-00", "NeuropixelsV2",
+        ["ProbeA"], n_chunks=3, finished=True, n_channels=8,
+    )
+    gap = (
+        experiment_dir / "2026-05-11T12-30-00" / "NeuropixelsV2"
+        / "NeuropixelsV2_ProbeA_AmplifierData_1.bin"
+    )
+    gap.unlink()  # leaves chunks 0 and 2 -> a numbering gap at 1
+    placed_by = "anom_user"
+    _place_trigger(experiment_dir, placed_by, datetime.datetime(2026, 6, 26, 5, 30, 0))
+
+    pipeline.RawEphysDiscovery.populate({"placed_by": placed_by})
+
+    row = (pipeline.RawEphysDiscovery & {"placed_by": placed_by}).fetch1()
+    assert row["num_anomalies"] >= 1
+    assert "Gap" in row["anomalies"]
+
+
 def test_deletion_refuses_while_disabled(activated_schema, tmp_path):
     import datetime
 

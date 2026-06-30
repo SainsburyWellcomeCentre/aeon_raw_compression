@@ -66,6 +66,8 @@ class RawEphysDiscovery(dj.Imported):
     -> RawEphysDiscoveryTrigger
     ---
     num_files_found  : int32         # new raw files registered by this run
+    num_anomalies    : int32         # gaps / unparseable names seen this run
+    anomalies=''     : varchar(2047) # joined anomaly messages (truncated)
     discovery_time   : datetime
     """
 
@@ -94,17 +96,24 @@ class RawEphysDiscovery(dj.Imported):
         # Registry-wide dedup: skip files already registered by any trigger.
         already_registered = set(RawEphysDiscovery.RawEphysFile.to_arrays("file_path"))
 
+        # Collect anomalies (numbering gaps, unparseable names) so they are
+        # persisted on the row, not just logged where they scroll past in a
+        # SLURM .out.
+        anomalies = []
         records = discover_raw_files(
             experiment_dir,
             experiment_path=trigger["experiment_path"],
             epoch_path=epoch_path,
             already_registered=already_registered,
+            on_anomaly=anomalies.append,
         )
 
         self.insert1(
             {
                 **key,
                 "num_files_found": len(records),
+                "num_anomalies": len(anomalies),
+                "anomalies": "; ".join(anomalies)[:2047],
                 "discovery_time": datetime.datetime.now(),
             }
         )

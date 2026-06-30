@@ -160,6 +160,24 @@ def test_default_epoch_finished_accepts_newer_timestamp_sibling(tmp_path):
     ]
 
 
+def test_numbering_gap_is_reported(tmp_path):
+    exp = make_epoch(
+        tmp_path, "AEONX1/exp", "2026-05-11T07-50-11", "NeuropixelsV2",
+        ["ProbeA"], n_chunks=3, finished=True, n_channels=8,
+    )
+    gap = (
+        exp / "2026-05-11T07-50-11" / "NeuropixelsV2"
+        / "NeuropixelsV2_ProbeA_AmplifierData_1.bin"
+    )
+    gap.unlink()  # leaves chunks 0 and 2 -> a gap at 1
+
+    msgs = []
+    discover_raw_files(
+        exp, on_anomaly=msgs.append, is_epoch_finished=_ALWAYS, is_quiescent=_ALWAYS,
+    )
+    assert any("Gap" in m and "missing" in m for m in msgs)
+
+
 def test_default_epoch_finished_via_old_mtime_no_newer_sibling(tmp_path):
     # The rig's LAST epoch: no newer sibling exists, but everything under it has
     # been stable for hours -> the final chunk must eventually register.
