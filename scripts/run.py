@@ -9,9 +9,10 @@ Example (nightly):
 """
 
 import argparse
+import sys
 
 from aeon_raw_compression import pipeline
-from aeon_raw_compression.cli import build_populate_restriction
+from aeon_raw_compression.cli import build_populate_restriction, summarize_run
 
 
 def main(argv=None):
@@ -39,6 +40,18 @@ def main(argv=None):
     pipeline.RawEphysDiscovery.populate(restriction, **populate_kwargs)
     pipeline.CompressedFile.populate(restriction, **populate_kwargs)
     # Intentionally no OriginalDeletion.populate(): deletion is disabled in v1.
+
+    num_registered = len(pipeline.RawEphysDiscovery.RawEphysFile & restriction)
+    num_compressed = len(pipeline.CompressedFile & restriction)
+    msg, failed = summarize_run(num_registered, num_compressed)
+    print(f"[aeon_raw_compression] {msg}")
+    if failed:
+        print(
+            "[aeon_raw_compression] some files registered but did not compress; "
+            "inspect CompressedFile.jobs for errors.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":

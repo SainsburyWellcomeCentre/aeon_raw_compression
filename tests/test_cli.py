@@ -6,7 +6,11 @@ by the HPC integration tests; here we only pin the pure row/restriction builders
 
 import datetime
 
-from aeon_raw_compression.cli import build_populate_restriction, build_trigger_row
+from aeon_raw_compression.cli import (
+    build_populate_restriction,
+    build_trigger_row,
+    summarize_run,
+)
 
 
 def test_build_trigger_row_with_explicit_time():
@@ -37,3 +41,10 @@ def test_build_populate_restriction_with_user():
 def test_build_populate_restriction_without_user():
     assert build_populate_restriction() == {}
     assert build_populate_restriction(None) == {}
+
+
+def test_summarize_run_flags_failures():
+    msg, failed = summarize_run(5, 5)
+    assert "errored=0" in msg and failed is False
+    msg, failed = summarize_run(5, 3)
+    assert "errored=2" in msg and failed is True
