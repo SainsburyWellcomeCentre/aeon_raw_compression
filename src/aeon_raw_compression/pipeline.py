@@ -108,20 +108,29 @@ class RawEphysDiscovery(dj.Imported):
                 "discovery_time": datetime.datetime.now(),
             }
         )
+        # skip_duplicates: under concurrent overlapping triggers, two runs can
+        # race past the in-Python already_registered dedup and collide on the
+        # unique index (file_path). Skipping the colliding rows lets the loser
+        # finish instead of erroring the whole discovery run into jobs.errors.
+        # num_files_found above is the count this run INTENDED to add (an upper
+        # bound; a few may be skipped by the index under that race).
         self.RawEphysFile.insert(
-            {
-                **key,
-                "file_path": r.file_path,
-                "experiment_path": r.experiment_path,
-                "epoch_dir": r.epoch_dir,
-                "device_name": r.device_name,
-                "probe_label": r.probe_label,
-                "file_name": r.file_name,
-                "file_size_bytes": r.file_size_bytes,
-                "num_channels": r.num_channels,
-                "sampling_frequency": r.sampling_frequency,
-            }
-            for r in records
+            (
+                {
+                    **key,
+                    "file_path": r.file_path,
+                    "experiment_path": r.experiment_path,
+                    "epoch_dir": r.epoch_dir,
+                    "device_name": r.device_name,
+                    "probe_label": r.probe_label,
+                    "file_name": r.file_name,
+                    "file_size_bytes": r.file_size_bytes,
+                    "num_channels": r.num_channels,
+                    "sampling_frequency": r.sampling_frequency,
+                }
+                for r in records
+            ),
+            skip_duplicates=True,
         )
 
 

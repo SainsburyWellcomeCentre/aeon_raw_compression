@@ -119,6 +119,25 @@ def test_placed_by_restriction_registers_only_that_users_files(activated_schema,
     assert len(pipeline.RawEphysDiscovery.RawEphysFile & {"placed_by": "bob"}) == 0
 
 
+def test_overlapping_triggers_do_not_double_register(activated_schema, tmp_path):
+    import datetime
+
+    experiment_dir = make_epoch(
+        tmp_path, "AEONX1/intexp_overlap", "2026-05-11T12-00-00", "NeuropixelsV2",
+        ["ProbeA"], n_chunks=3, finished=True, n_channels=8,
+    )
+    _place_trigger(experiment_dir, "ov_user", datetime.datetime(2026, 6, 26, 5, 0, 0))
+    _place_trigger(experiment_dir, "ov_user", datetime.datetime(2026, 6, 26, 5, 0, 1))
+
+    # Both triggers cover the same dir; the second must not raise on the unique
+    # index and must not create duplicate registry rows.
+    pipeline.RawEphysDiscovery.populate({"placed_by": "ov_user"}, suppress_errors=False)
+
+    files = pipeline.RawEphysDiscovery.RawEphysFile & {"placed_by": "ov_user"}
+    paths = files.to_arrays("file_path")
+    assert len(paths) == len(set(paths))  # no duplicate physical files
+
+
 def test_deletion_refuses_while_disabled(activated_schema, tmp_path):
     import datetime
 
