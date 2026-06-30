@@ -7,6 +7,8 @@ scoping, dedup, and probe-param population. ``is_epoch_finished`` and
 
 import json
 
+import pytest
+
 from aeon_raw_compression.discovery import RawFileRecord, discover_raw_files
 from tests.fixtures.synthetic_ephys import make_epoch
 
@@ -149,3 +151,24 @@ def test_default_epoch_finished_accepts_newer_timestamp_sibling(tmp_path):
         "NeuropixelsV2_ProbeA_AmplifierData_0.bin",
         "NeuropixelsV2_ProbeA_AmplifierData_1.bin",  # final chunk now included
     ]
+
+
+def test_file_path_is_not_symlink_resolved(tmp_path):
+    # In a symlinked sandbox (like ~/sciops-data -> Ceph), file_path must keep
+    # the symlink path so the zarr writes to the writable side, not the real
+    # (read-only) target. Skipped where symlinks aren't permitted (e.g. Windows).
+    make_epoch(
+        tmp_path / "real", "AEONX1/exp", "2026-05-11T07-50-11", "NeuropixelsV2",
+        ["ProbeA"], n_chunks=2, finished=True, n_channels=8,
+    )
+    sandbox = tmp_path / "sandbox"
+    try:
+        sandbox.symlink_to(tmp_path / "real" / "AEONX1" / "exp", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not permitted on this platform")
+
+    recs = discover_raw_files(sandbox, is_epoch_finished=_ALWAYS, is_quiescent=_ALWAYS)
+    assert recs
+    for r in recs:
+        assert "sandbox" in r.file_path  # kept the symlink path
+        assert "/real/" not in r.file_path  # NOT resolved to the real target

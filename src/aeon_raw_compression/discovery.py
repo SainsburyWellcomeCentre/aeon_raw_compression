@@ -144,7 +144,11 @@ def discover_raw_files(
             on_anomaly(f"Skipping {f.name}: probe {probe_label} is disabled in Metadata.yml")
             continue
 
-        file_path = f.resolve().as_posix()
+        # Keep the path AS WALKED -- do NOT resolve() symlinks. In a symlinked
+        # sandbox (golden data: ~/sciops-data symlinks -> read-only Ceph) the
+        # zarr is written beside this path, so it must stay in the writable
+        # location. In production (no symlinks) resolve() is a no-op anyway.
+        file_path = f.as_posix()
         if file_path in already:
             continue
 
