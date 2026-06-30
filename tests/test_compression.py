@@ -69,6 +69,36 @@ def test_verify_detects_sample_count_mismatch(tmp_path):
         verify_roundtrip(b, z, num_channels=8, sampling_frequency=30000)
 
 
+def test_compress_forwards_explicit_n_jobs(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    captured = {}
+
+    class FakeRec:
+        def get_num_samples(self):
+            return 10
+
+        def save(self, **kwargs):
+            captured.update(kwargs)
+            Path(kwargs["folder"]).mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        "aeon_raw_compression.compression._read_binary",
+        lambda *a, **k: FakeRec(),
+    )
+    b = tmp_path / "Dev_ProbeA_AmplifierData_0.bin"
+    b.write_bytes(b"\x00" * 32)
+    z = tmp_path / "Dev_ProbeA_AmplifierData_0.zarr"
+
+    compress_to_zarr(b, z, num_channels=8, sampling_frequency=30000, n_jobs=1)
+    assert captured["n_jobs"] == 1
+
+    # Also confirm the DEFAULT path forwards an explicit integer (not None/auto).
+    captured.clear()
+    compress_to_zarr(b, z, num_channels=8, sampling_frequency=30000)
+    assert captured["n_jobs"] == 1
+
+
 def test_compress_removes_stale_zarr(tmp_path):
     b = tmp_path / "Dev_ProbeA_AmplifierData_0.bin"
     _write_bin(b)

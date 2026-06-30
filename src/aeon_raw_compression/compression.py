@@ -18,6 +18,7 @@ and would break the byte-for-byte guarantee that is the point of a verified raw
 archive.
 """
 
+import os
 import shutil
 import time
 from dataclasses import dataclass
@@ -29,6 +30,11 @@ from numcodecs import Blosc
 from aeon_raw_compression.metadata import NP2_DTYPE
 
 CODEC_NAME = "blosc-zstd-5-bitshuffle"
+
+# Explicit n_jobs (never rely on SpikeInterface's global default). 1 is safe on
+# SLURM: it avoids the os.cpu_count() oversubscription trap and the intermittent
+# fork+BLAS crash on this HPC. Override via env for a deliberately parallel run.
+DEFAULT_N_JOBS = int(os.environ.get("AEON_RAW_COMPRESSION_N_JOBS", "1"))
 
 # Samples per block for the memory-bounded round-trip compare. Large enough to
 # keep overhead low, small enough that a 30 GB chunk never loads at once.
@@ -72,7 +78,7 @@ def _read_binary(bin_path, num_channels, sampling_frequency, dtype):
 
 
 def compress_to_zarr(
-    bin_path, zarr_path, num_channels, sampling_frequency, dtype=NP2_DTYPE
+    bin_path, zarr_path, num_channels, sampling_frequency, dtype=NP2_DTYPE, n_jobs=DEFAULT_N_JOBS
 ) -> CompressionResult:
     """Compress ``bin_path`` to a zarr directory at ``zarr_path``.
 
@@ -91,7 +97,13 @@ def compress_to_zarr(
     num_samples = int(recording.get_num_samples())
 
     start = time.perf_counter()
-    recording.save(format="zarr", folder=str(zarr_path), compressor=_blosc_compressor())
+    recording.save(
+        format="zarr",
+        folder=str(zarr_path),
+        compressor=_blosc_compressor(),
+        n_jobs=int(n_jobs),
+        progress_bar=False,
+    )
     compression_time_s = time.perf_counter() - start
 
     compressed_size = _directory_size(zarr_path)
