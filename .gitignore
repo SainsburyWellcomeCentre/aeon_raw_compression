@@ -42,3 +42,6 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# Local build/planning notes (never published)
+docs/superpowers/
