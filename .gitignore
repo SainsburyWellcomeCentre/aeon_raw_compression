@@ -2,6 +2,9 @@
 datajoint.json
 .secrets/
 
+# Local, personal developer notes (internal context, never published)
+CLAUDE.local.md
+
 # Virtual environments
 .venv/
 venv/
