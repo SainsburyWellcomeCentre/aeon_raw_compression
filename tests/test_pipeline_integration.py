@@ -33,8 +33,17 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture(scope="module")
 def activated_schema():
-    """Activate the compression schema on a throwaway prefix; drop it after."""
+    """Activate the compression schema on a throwaway prefix; drop it after.
+
+    Drops any schema left behind by a previously *interrupted* run first (that
+    run never reached the teardown below), so the suite always starts from a
+    clean throwaway schema and hardcoded trigger keys never collide across runs.
+    """
+    import datajoint as dj
+
     prefix = os.environ.get("AEON_TEST_PREFIX", "test_rawcomp")
+    schema_name = pipeline._schema_name(prefix)
+    dj.conn().query(f"DROP DATABASE IF EXISTS `{schema_name}`")  # clear a stale run
     pipeline.activate(prefix)
     yield pipeline
     pipeline.schema.drop(prompt=False)
@@ -299,6 +308,11 @@ def test_real_chunk_full_pipeline_roundtrip_and_deletion(
 
     # Writable copy: AEONX1/realcopy/<epoch>/<device>/{Metadata.yml, chunk_N, stub_{N+1}}.
     experiment_dir = tmp_path / "AEONX1" / "realcopy"
+    placed_by = "real_user"
+    # Place the trigger BEFORE the ~14 GB copy so any problem (e.g. a collision
+    # with a stale row) fails fast instead of after minutes of copying.
+    _place_trigger(experiment_dir, placed_by, datetime.datetime(2026, 7, 1, 0, 0, 0))
+
     dst_epoch = experiment_dir / src_epoch_dir.name
     dst_device = dst_epoch / src_device_dir.name
     dst_device.mkdir(parents=True, exist_ok=True)
@@ -312,8 +326,6 @@ def test_real_chunk_full_pipeline_roundtrip_and_deletion(
     )
     (dst_device / stub).write_bytes(b"")
 
-    placed_by = "real_user"
-    _place_trigger(experiment_dir, placed_by, datetime.datetime(2026, 7, 1, 0, 0, 0))
     pipeline.RawEphysDiscovery.populate({"placed_by": placed_by}, suppress_errors=False)
 
     # Exactly the one real chunk registers; the stub is the held-back final chunk.
