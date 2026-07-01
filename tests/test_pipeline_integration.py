@@ -9,9 +9,10 @@ configured (datajoint.json + .secrets), against a throwaway prefix:
 
 The schema (`<prefix>_aeon_raw_compression`) is created at module start and
 dropped at the end. Synthetic data is written to pytest's ``tmp_path`` (a
-writable scratch dir), so no real Ceph data or write access to the raw store is
-needed for tests 1-4. Test 5 exercises a real golden chunk only when
-``AEON_GOLDEN_CHUNK`` is set.
+writable scratch dir), so most tests need no real Ceph data or write access to
+the raw store. The final test drives the WHOLE pipeline on a *copy* of one real
+chunk and runs only when ``AEON_REAL_CHUNK`` points at a real
+``*_AmplifierData_*.bin`` (compute node, roomy ``--basetemp``).
 
 Determinism note: ``RawEphysDiscovery.make`` uses discovery's *default*
 completeness rule. Freshly-written synthetic files are not yet "quiescent" (the
@@ -247,28 +248,102 @@ def test_deletion_deletes_original_and_is_idempotent(activated_schema, tmp_path,
 
 
 @pytest.mark.skipif(
-    not os.environ.get("AEON_GOLDEN_CHUNK"),
-    reason="set AEON_GOLDEN_CHUNK to a real *_AmplifierData_*.bin to run this",
+    not os.environ.get("AEON_REAL_CHUNK"),
+    reason="set AEON_REAL_CHUNK to a real *_AmplifierData_*.bin (enabled probe) to run this",
 )
-def test_golden_chunk_roundtrip_and_stem_contract(tmp_path):
-    """A real golden chunk reads back byte-exact and the zarr keeps the stem.
+def test_real_chunk_full_pipeline_roundtrip_and_deletion(
+    activated_schema, tmp_path, monkeypatch
+):
+    """The holistic real-data test: the WHOLE pipeline, on a copy of one real chunk.
 
-    The same-stem/.zarr naming is the contract the (future) aeon_mecha read-side
-    resolver relies on. The resolver itself ships in a separate aeon_mecha PR, so
-    the downstream-find half is left as a documented TODO here.
+    This is the single artifact behind "if the tests pass, it works for everyone".
+    On a *copy* of one real chunk it drives every step through the DataJoint
+    tables and asserts each:
+
+    * discovery parses a **real** ``Metadata.yml`` (num_channels is derived from
+      it, not passed in) and registers the real chunk;
+    * ``CompressedFile.make`` compresses to zarr and verifies a **byte-exact**
+      round-trip on real 384-ch data (``checksum_match``);
+    * the durable ``content_hash`` recipe holds on real data -- the zarr
+      re-decodes to the original bytes without the original present;
+    * the real ``OriginalDeletion`` path removes the original (run on the COPY,
+      so it is safe; v1 still keeps deletion source-gated).
+
+    Point ``AEON_REAL_CHUNK`` at an **enabled** probe's ``*_AmplifierData_*.bin``.
+    Two things are deliberately OUT OF SCOPE (deferred to the team): read-only
+    Ceph write/delete (we copy into a writable tmp dir) and the "finished
+    recording" completeness detection (a 0-byte successor stub closes the copied
+    chunk via the successor rule, so quiescence/epoch-finished never runs here).
+
+    Run on a compute node, >=4h walltime, with a roomy tmp dir
+    (``--basetemp=<scratch>`` -- the copy + zarr need ~3x the chunk size). ~30-50 min.
     """
+    import datetime
+    import hashlib
+    import shutil
     from pathlib import Path
 
-    from aeon_raw_compression.compression import compress_to_zarr, verify_roundtrip
+    import spikeinterface as si
 
-    bin_path = Path(os.environ["AEON_GOLDEN_CHUNK"])
-    num_channels = int(os.environ.get("AEON_GOLDEN_NUM_CHANNELS", "384"))
-    zarr_path = tmp_path / (bin_path.stem + ".zarr")
+    from aeon_raw_compression.discovery import _AMPLIFIER_RE
 
-    result = compress_to_zarr(bin_path, zarr_path, num_channels, 30000)
-    assert result.codec_name == "blosc-zstd-5-bitshuffle"
-    assert Path(result.zarr_path).name == bin_path.stem + ".zarr"  # stem contract
+    src_chunk = Path(os.environ["AEON_REAL_CHUNK"])
+    src_device_dir = src_chunk.parent
+    src_epoch_dir = src_device_dir.parent
+    src_metadata = src_epoch_dir / "Metadata.yml"
+    assert src_metadata.exists(), f"no Metadata.yml beside {src_epoch_dir}"
 
-    verification = verify_roundtrip(bin_path, zarr_path, num_channels, 30000)
-    assert verification.checksum_match is True
-    # TODO(companion-PR): assert the aeon_mecha resolver finds this .zarr by stem.
+    match = _AMPLIFIER_RE.search(src_chunk.name)
+    assert match, f"AEON_REAL_CHUNK name not a *_AmplifierData_N.bin: {src_chunk.name!r}"
+    chunk_n = int(match.group(2))
+
+    # Writable copy: AEONX1/realcopy/<epoch>/<device>/{Metadata.yml, chunk_N, stub_{N+1}}.
+    experiment_dir = tmp_path / "AEONX1" / "realcopy"
+    dst_epoch = experiment_dir / src_epoch_dir.name
+    dst_device = dst_epoch / src_device_dir.name
+    dst_device.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src_metadata, dst_epoch / "Metadata.yml")
+    dst_chunk = dst_device / src_chunk.name
+    shutil.copy2(src_chunk, dst_chunk)
+    # 0-byte successor stub: closes the real chunk via the successor rule so this
+    # test does not depend on the (deferred) quiescence / epoch-finished logic.
+    stub = src_chunk.name.replace(
+        f"_AmplifierData_{chunk_n}.bin", f"_AmplifierData_{chunk_n + 1}.bin"
+    )
+    (dst_device / stub).write_bytes(b"")
+
+    placed_by = "real_user"
+    _place_trigger(experiment_dir, placed_by, datetime.datetime(2026, 7, 1, 0, 0, 0))
+    pipeline.RawEphysDiscovery.populate({"placed_by": placed_by}, suppress_errors=False)
+
+    # Exactly the one real chunk registers; the stub is the held-back final chunk.
+    registered = (
+        pipeline.RawEphysDiscovery.RawEphysFile & {"placed_by": placed_by}
+    ).to_dicts()
+    assert [r["file_name"] for r in registered] == [src_chunk.name]
+    # Independent check that the channel count parsed from the real Metadata.yml
+    # fits the real file (a wrong-but-consistent count would still round-trip, so
+    # checksum_match alone would not catch a metadata-parse regression).
+    n_channels = registered[0]["num_channels"]
+    assert n_channels > 0 and src_chunk.stat().st_size % (n_channels * 2) == 0
+
+    pipeline.CompressedFile.populate({"placed_by": placed_by}, suppress_errors=False)
+    row = (pipeline.CompressedFile & {"placed_by": placed_by}).fetch1()
+    assert bool(row["checksum_match"]) is True  # byte-exact round-trip on real data
+    assert row["codec_name"] == "blosc-zstd-5-bitshuffle"
+    assert row["compression_ratio"] > 1.0
+    assert row["zarr_path"].endswith(".zarr")
+    assert len(row["content_hash"]) == 64
+
+    # content_hash recipe on REAL data: the zarr re-decodes to the original bytes.
+    zarr_traces = si.load(row["zarr_path"]).get_traces().tobytes()
+    assert hashlib.sha256(zarr_traces).hexdigest() == row["content_hash"]
+
+    # Real deletion path, exercised on the COPY (safe). Flip the source gate here
+    # to prove the only data-destroying code BEFORE anyone enables it for real.
+    key = (pipeline.CompressedFile & {"placed_by": placed_by}).keys()[0]
+    assert dst_chunk.exists()
+    monkeypatch.setattr(pipeline, "DELETION_ENABLED", True)
+    pipeline.OriginalDeletion.populate(key, suppress_errors=False)
+    assert not dst_chunk.exists()
+    assert bool((pipeline.OriginalDeletion & key).fetch1("original_existed")) is True

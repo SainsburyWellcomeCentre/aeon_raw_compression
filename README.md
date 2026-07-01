@@ -39,6 +39,12 @@ exists, or — for the final chunk — the epoch is finished and the file is
 quiescent). A `CompressedFile` row exists only if compression *and* verification
 both passed.
 
+Each `CompressedFile` row also stores a `content_hash` (SHA-256 of the original
+`.bin`). Verification already proves the round-trip at write time; the hash is a
+**durable digest** for the deletion era — once an original is deleted, a future
+tool can re-confirm the zarr still decodes to those exact bytes (by hashing
+`si.load(zarr).get_traces().tobytes()`) without needing the original present.
+
 ## Install (per-user submodule)
 
 ```bash
@@ -84,8 +90,24 @@ never touches that table.
 # Unit tests — no database, no real data:
 uv run --extra dev pytest -m "not integration"
 
-# Integration tests — run on the HPC against aeondj (datajoint.json + .secrets):
-uv run --extra dev pytest -m integration
+# Integration tests — run on the HPC against aeondj (datajoint.json + .secrets).
+# Set AEON_TEST_PREFIX to a prefix you can create schemas under; the suite makes
+# a throwaway schema and drops it at the end:
+AEON_TEST_PREFIX=<your_prefix>_ uv run --extra dev pytest -m integration
+```
+
+The integration suite proves the DataJoint pipeline end-to-end on synthetic
+data. One further test (`test_real_chunk_full_pipeline_roundtrip_and_deletion`)
+runs the **whole pipeline on a copy of one real chunk** — real `Metadata.yml`
+parse, byte-exact compress/verify, the `content_hash` recipe, and (on the safe
+copy) real deletion. It runs only when `AEON_REAL_CHUNK` points at a real
+`*_AmplifierData_*.bin` from an enabled probe, and needs a compute node with a
+roomy temp dir (the copy + zarr take ~3× the chunk size):
+
+```bash
+AEON_TEST_PREFIX=<your_prefix>_ \
+AEON_REAL_CHUNK=/path/to/<epoch>/<device>/<name>_AmplifierData_0.bin \
+uv run --extra dev pytest -m integration --basetemp=/path/to/roomy/scratch
 ```
 
 ## More

@@ -109,6 +109,29 @@ relying on the nightly job.
 a deliberate, version-controlled code change, made only once the team decides
 the time has come and a write/delete-capable store is in place.
 
+## Deferred to the team (solve once everything else is verified)
+
+Two questions cannot be answered from a developer machine — they need real
+infrastructure access and a team decision. The rest of the library is built and
+tested so these are the *only* things left to settle before a production
+nightly run:
+
+1. **Real-Ceph write/delete under the current restrictions.** Compression writes
+   the `.zarr` beside the original and deletion removes the original; both need
+   write/delete on the raw store, which is read-only for some accounts today.
+   Until a writable location / permission structure is agreed, run only against a
+   writable **copy** (that is exactly what the real-chunk integration test does).
+
+2. **Completeness detection in practice** — "don't compress a file that is still
+   recording". The successor rule is a hard guarantee; the *final* chunk relies on
+   the quiescence + epoch-finished signals, whose real thresholds
+   (`AEON_RAW_COMPRESSION_QUIESCENCE_S`, `AEON_RAW_COMPRESSION_EPOCH_MAX_AGE_S`)
+   can only be tuned by watching real acquisition on Ceph. These are env vars on
+   purpose, so tuning needs no code change.
+
+Both are deliberately out of scope for the current validation; raise them with
+the team once the pipeline is reviewed and working.
+
 ## Running the integration tests (HPC)
 
 The DataJoint-layer tests are marked `integration` and run on the HPC against
