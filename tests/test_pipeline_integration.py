@@ -232,15 +232,17 @@ def test_deletion_deletes_original_and_is_idempotent(activated_schema, tmp_path,
 
     monkeypatch.setattr(pipeline, "DELETION_ENABLED", True)
 
+    # Drive it through the real populate() path (a direct make() call is blocked
+    # by DataJoint's auto-populated-table insert guard). Restrict to this key.
     # 1) Original present -> deleted, recorded as original_existed=True.
-    pipeline.OriginalDeletion().make(key)
+    pipeline.OriginalDeletion.populate(key, suppress_errors=False)
     assert not bin_path.exists()
     assert bool((pipeline.OriginalDeletion & key).fetch1("original_existed")) is True
 
     # 2) Idempotent re-run: original already gone -> original_existed=False, no
-    #    error. (Drop the tracking row first so make() runs again for the key.)
+    #    error. (Drop the tracking row so the key is unpopulated and re-runs.)
     (pipeline.OriginalDeletion & key).delete_quick()
-    pipeline.OriginalDeletion().make(key)
+    pipeline.OriginalDeletion.populate(key, suppress_errors=False)
     assert bool((pipeline.OriginalDeletion & key).fetch1("original_existed")) is False
 
 
