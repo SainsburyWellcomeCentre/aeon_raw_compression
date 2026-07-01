@@ -6,6 +6,8 @@ and deletion is hard-disabled in source. The populate logic is exercised by the
 HPC integration tests (Task 8), not here.
 """
 
+from pathlib import Path
+
 import datajoint as dj
 
 from aeon_raw_compression import pipeline
@@ -39,3 +41,15 @@ def test_schema_name_has_single_separator():
         == "u_elissas_aeon_ephys_v2_test_aeon_raw_compression"
     )
     assert pipeline._schema_name("test_rawcomp") == "test_rawcomp_aeon_raw_compression"
+
+
+def test_resolve_experiment_dir_relative_vs_absolute(tmp_path):
+    # Absolute experiment_path is used as-is (the path tests pass directly).
+    abs_dir = tmp_path / "AEONX1" / "exp"
+    assert pipeline._resolve_experiment_dir(str(abs_dir)) == Path(str(abs_dir))
+
+    # A RELATIVE experiment_path -- the real add_trigger.py "AEONX1/exp" case --
+    # is resolved against RAW_DATA_ROOT. This production path is otherwise
+    # untested (the integration tests all pass absolute dirs).
+    resolved = pipeline._resolve_experiment_dir("AEONX1/exp")
+    assert resolved == Path(pipeline.RAW_DATA_ROOT) / "AEONX1/exp"

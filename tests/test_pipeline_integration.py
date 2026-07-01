@@ -210,6 +210,40 @@ def test_failed_verification_inserts_no_row_and_removes_zarr(
     assert list(Path(experiment_dir).rglob("*.zarr")) == []
 
 
+def test_deletion_deletes_original_and_is_idempotent(activated_schema, tmp_path, monkeypatch):
+    # The only data-destroying code in the system. v1 keeps it source-gated
+    # (DELETION_ENABLED=False), so exercise the real logic by flipping the flag
+    # here -- proving it BEFORE anyone enables it against real data.
+    import datetime
+    from pathlib import Path
+
+    experiment_dir = make_epoch(
+        tmp_path, "AEONX1/intexp_delok", "2026-05-11T14-00-00", "NeuropixelsV2",
+        ["ProbeA"], n_chunks=3, finished=True, n_channels=8,
+    )
+    placed_by = "delok_user"
+    _place_trigger(experiment_dir, placed_by, datetime.datetime(2026, 6, 26, 7, 0, 0))
+    pipeline.RawEphysDiscovery.populate({"placed_by": placed_by})
+    pipeline.CompressedFile.populate({"placed_by": placed_by})
+
+    key = (pipeline.CompressedFile & {"placed_by": placed_by}).keys()[0]
+    bin_path = Path((pipeline.RawEphysDiscovery.RawEphysFile & key).fetch1("file_path"))
+    assert bin_path.exists()
+
+    monkeypatch.setattr(pipeline, "DELETION_ENABLED", True)
+
+    # 1) Original present -> deleted, recorded as original_existed=True.
+    pipeline.OriginalDeletion().make(key)
+    assert not bin_path.exists()
+    assert bool((pipeline.OriginalDeletion & key).fetch1("original_existed")) is True
+
+    # 2) Idempotent re-run: original already gone -> original_existed=False, no
+    #    error. (Drop the tracking row first so make() runs again for the key.)
+    (pipeline.OriginalDeletion & key).delete_quick()
+    pipeline.OriginalDeletion().make(key)
+    assert bool((pipeline.OriginalDeletion & key).fetch1("original_existed")) is False
+
+
 @pytest.mark.skipif(
     not os.environ.get("AEON_GOLDEN_CHUNK"),
     reason="set AEON_GOLDEN_CHUNK to a real *_AmplifierData_*.bin to run this",

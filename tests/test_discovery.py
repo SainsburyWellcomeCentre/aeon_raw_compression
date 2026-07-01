@@ -178,6 +178,39 @@ def test_numbering_gap_is_reported(tmp_path):
     assert any("Gap" in m and "missing" in m for m in msgs)
 
 
+def test_unparseable_amplifier_name_is_reported(tmp_path):
+    # A file matching the *_AmplifierData*.bin glob but not the probe/chunk regex
+    # (here: no _ProbeX_, non-numeric index) is skipped with an anomaly, not
+    # silently dropped.
+    exp = make_epoch(
+        tmp_path, "AEONX1/exp", "2026-05-11T07-50-11", "NeuropixelsV2",
+        ["ProbeA"], n_chunks=2, finished=True, n_channels=8,
+    )
+    dev = exp / "2026-05-11T07-50-11" / "NeuropixelsV2"
+    (dev / "NeuropixelsV2_AmplifierData_junk.bin").write_bytes(b"\x00" * 16)
+
+    msgs = []
+    discover_raw_files(
+        exp, on_anomaly=msgs.append, is_epoch_finished=_ALWAYS, is_quiescent=_ALWAYS,
+    )
+    assert any("Cannot parse" in m for m in msgs)
+
+
+def test_unexpected_path_structure_is_reported(tmp_path):
+    # A validly-named amp file sitting directly under the experiment dir (no
+    # epoch/device subdirs) can't yield an epoch/device -> anomaly, not a record.
+    exp = tmp_path / "AEONX1/exp"
+    exp.mkdir(parents=True)
+    (exp / "NeuropixelsV2_ProbeA_AmplifierData_0.bin").write_bytes(b"\x00" * 16)
+
+    msgs = []
+    recs = discover_raw_files(
+        exp, on_anomaly=msgs.append, is_epoch_finished=_ALWAYS, is_quiescent=_ALWAYS,
+    )
+    assert recs == []
+    assert any("Unexpected path structure" in m for m in msgs)
+
+
 def test_default_epoch_finished_via_old_mtime_no_newer_sibling(tmp_path):
     # The rig's LAST epoch: no newer sibling exists, but everything under it has
     # been stable for hours -> the final chunk must eventually register.

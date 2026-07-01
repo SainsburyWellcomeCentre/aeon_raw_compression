@@ -56,6 +56,25 @@ def test_compress_records_sha256_of_original(tmp_path):
     assert len(res.content_hash) == 64
 
 
+def test_content_hash_verifies_zarr_without_original(tmp_path):
+    # The durable-digest contract: a future tool can confirm the zarr still
+    # decodes to the original by hashing si.load(zarr).get_traces().tobytes()
+    # and comparing to content_hash -- WITHOUT the original .bin present. This
+    # guards against a future SpikeInterface change to get_traces' byte layout
+    # silently invalidating every stored content_hash with no failing test.
+    import hashlib
+
+    import spikeinterface as si
+
+    b = tmp_path / "Dev_ProbeA_AmplifierData_0.bin"
+    _write_bin(b)
+    z = tmp_path / "Dev_ProbeA_AmplifierData_0.zarr"
+    res = compress_to_zarr(b, z, num_channels=8, sampling_frequency=30000)
+
+    reconstructed = si.load(str(z)).get_traces().tobytes()
+    assert hashlib.sha256(reconstructed).hexdigest() == res.content_hash
+
+
 def test_verify_detects_data_mismatch(tmp_path):
     b = tmp_path / "Dev_ProbeA_AmplifierData_0.bin"
     data = _write_bin(b)
