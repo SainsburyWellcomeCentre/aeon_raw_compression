@@ -298,18 +298,20 @@ def test_real_chunk_full_pipeline_roundtrip_and_deletion(
 
     * discovery parses a **real** ``Metadata.yml`` (num_channels is derived from
       it, not passed in) and registers the real chunk;
-    * ``CompressedFile.make`` compresses to zarr and verifies a **byte-exact**
-      round-trip on real 384-ch data (``checksum_match``);
+    * ``CompressedFile.make`` compresses to zarr under the **processed** root and
+      verifies a **byte-exact** round-trip on real 384-ch data (``checksum_match``);
     * the durable ``content_hash`` recipe holds on real data -- the zarr
       re-decodes to the original bytes without the original present;
-    * the real ``RawEphysFileDeletion`` path removes the original (run on the COPY,
-      so it is safe; v1 still keeps deletion source-gated).
+    * ``report_deletable`` green-lights the file, then the real
+      ``RawEphysFileDeletion`` path removes it (run on the COPY, so it is safe;
+      v1 still keeps automated deletion source-gated).
 
     Point ``AEON_REAL_CHUNK`` at an **enabled** probe's ``*_AmplifierData_*.bin``.
-    Two things are deliberately OUT OF SCOPE (deferred to the team): read-only
-    Ceph write/delete (we copy into a writable tmp dir) and the "finished
-    recording" completeness detection (a 0-byte successor stub closes the copied
-    chunk via the successor rule, so quiescence/epoch-finished never runs here).
+    The copy preserves the source mtime (``shutil.copy2``), which is far older
+    than 1 h, so the chunk is immediately eligible -- no stub needed. Two things
+    are deliberately OUT OF SCOPE (deferred to the team): read-only Ceph
+    write/delete (we copy into a writable tmp dir) and tuning the real "finished
+    recording" mtime threshold.
 
     Run on a compute node, >=4h walltime, with a roomy tmp dir
     (``--basetemp=<scratch>`` -- the copy + zarr need ~3x the chunk size). ~30-50 min.
@@ -321,23 +323,17 @@ def test_real_chunk_full_pipeline_roundtrip_and_deletion(
 
     import spikeinterface as si
 
-    from aeon_raw_compression.discovery import _AMPLIFIER_RE
-
     src_chunk = Path(os.environ["AEON_REAL_CHUNK"])
     src_device_dir = src_chunk.parent
     src_epoch_dir = src_device_dir.parent
     src_metadata = src_epoch_dir / "Metadata.yml"
     assert src_metadata.exists(), f"no Metadata.yml beside {src_epoch_dir}"
 
-    match = _AMPLIFIER_RE.search(src_chunk.name)
-    assert match, f"AEON_REAL_CHUNK name not a *_AmplifierData_N.bin: {src_chunk.name!r}"
-    chunk_n = int(match.group(2))
-
-    # Writable copy: AEONX1/realcopy/<epoch>/<device>/{Metadata.yml, chunk_N, stub_{N+1}}.
-    experiment_dir = tmp_path / "AEONX1" / "realcopy"
+    # Copy under a writable raw root; the zarr then lands under the processed root.
+    raw, proc = _use_roots(monkeypatch, tmp_path)
+    experiment_dir = raw / "AEONX1" / "realcopy"
     placed_by = "real_user"
-    # Place the trigger BEFORE the ~14 GB copy so any problem (e.g. a collision
-    # with a stale row) fails fast instead of after minutes of copying.
+    # Place the trigger BEFORE the ~14 GB copy so a problem fails fast.
     _place_trigger(experiment_dir, placed_by, datetime.datetime(2026, 7, 1, 0, 0, 0))
 
     dst_epoch = experiment_dir / src_epoch_dir.name
@@ -345,17 +341,11 @@ def test_real_chunk_full_pipeline_roundtrip_and_deletion(
     dst_device.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src_metadata, dst_epoch / "Metadata.yml")
     dst_chunk = dst_device / src_chunk.name
-    shutil.copy2(src_chunk, dst_chunk)
-    # 0-byte successor stub: closes the real chunk via the successor rule so this
-    # test does not depend on the (deferred) quiescence / epoch-finished logic.
-    stub = src_chunk.name.replace(
-        f"_AmplifierData_{chunk_n}.bin", f"_AmplifierData_{chunk_n + 1}.bin"
-    )
-    (dst_device / stub).write_bytes(b"")
+    shutil.copy2(src_chunk, dst_chunk)  # copy2 preserves the (old) mtime -> eligible
 
     pipeline.RawEphysDiscovery.populate({"placed_by": placed_by}, suppress_errors=False)
 
-    # Exactly the one real chunk registers; the stub is the held-back final chunk.
+    # The one real chunk registers (its mtime is old); nothing else is present.
     registered = (
         pipeline.RawEphysDiscovery.RawEphysFile & {"placed_by": placed_by}
     ).to_dicts()
@@ -371,8 +361,13 @@ def test_real_chunk_full_pipeline_roundtrip_and_deletion(
     assert bool(row["checksum_match"]) is True  # byte-exact round-trip on real data
     assert row["codec_name"] == "blosc-zstd-5-bitshuffle"
     assert row["compression_ratio"] > 1.0
+    assert row["zarr_path"].startswith(str(proc))  # written under the processed root
     assert row["zarr_path"].endswith(".zarr")
     assert len(row["content_hash"]) == 64
+
+    # Small-file count of the produced zarr -- feeds the terabyte extrapolation.
+    n_zarr_files = sum(1 for p in Path(row["zarr_path"]).rglob("*") if p.is_file())
+    print(f"[zarr-files] {n_zarr_files} files for {row['num_samples']} samples")
 
     # content_hash recipe on REAL data: the zarr re-decodes to the original bytes.
     # Hash block-by-block (memory-bounded) -- a full get_traces() on a real chunk
@@ -385,6 +380,10 @@ def test_real_chunk_full_pipeline_roundtrip_and_deletion(
         digest.update(compressed.get_traces(start_frame=start, end_frame=end).tobytes())
     assert digest.hexdigest() == row["content_hash"]
 
+    # The read-only green-light lists this verified, still-present file.
+    deletable = pipeline.report_deletable({"placed_by": placed_by})
+    assert [d["file_path"] for d in deletable] == [dst_chunk.as_posix()]
+
     # Real deletion path, exercised on the COPY (safe). Flip the source gate here
     # to prove the only data-destroying code BEFORE anyone enables it for real.
     key = (pipeline.CompressedFile & {"placed_by": placed_by}).keys()[0]
@@ -393,3 +392,5 @@ def test_real_chunk_full_pipeline_roundtrip_and_deletion(
     pipeline.RawEphysFileDeletion.populate(key, suppress_errors=False)
     assert not dst_chunk.exists()
     assert bool((pipeline.RawEphysFileDeletion & key).fetch1("original_existed")) is True
+    # Once actioned + gone, it drops off the green-light list.
+    assert pipeline.report_deletable({"placed_by": placed_by}) == []
