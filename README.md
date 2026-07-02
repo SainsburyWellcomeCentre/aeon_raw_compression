@@ -45,9 +45,20 @@ Each `CompressedFile` row also stores a `content_hash` (SHA-256 of the original
 tool can re-confirm the zarr still decodes to those exact bytes (by hashing
 `si.load(zarr).get_traces().tobytes()`) without needing the original present.
 
-## Install (per-user submodule)
+## Install
+
+The library is a standard pip-installable package. Delivery method does not
+change how it works — you `import aeon_raw_compression` and call
+`pipeline.activate(<prefix>)` the same way regardless (importing opens no
+database connection).
 
 ```bash
+# Recommended: pip install a tagged version into your project environment
+pip install "git+https://github.com/SainsburyWellcomeCentre/aeon_raw_compression@v0.1.0"
+```
+
+```bash
+# Alternative: add as a git submodule next to your analysis repo
 cd <your-analysis-repo>
 git submodule add https://github.com/SainsburyWellcomeCentre/aeon_raw_compression
 git commit -m "Add aeon_raw_compression submodule"

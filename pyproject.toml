@@ -2,7 +2,18 @@
 name = "aeon_raw_compression"
 version = "0.1.0"
 description = "Standalone DataJoint library for lossless compression of raw ephys acquisition files"
+readme = "README.md"
 requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Sainsbury Wellcome Centre" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     # Floor mirrors aeon_mecha (spikeinterface[full]>=0.104.0); the validated
     # compression testing ran on 0.104.x. Not an exact == pin: this library is
@@ -22,7 +33,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff", "jupytext", "matplotlib"]
+dev = ["pytest", "ruff", "jupytext", "matplotlib", "build", "hatchling"]
+
+[project.urls]
+Homepage = "https://github.com/SainsburyWellcomeCentre/aeon_raw_compression"
+"Source Code" = "https://github.com/SainsburyWellcomeCentre/aeon_raw_compression"
+"Bug Tracker" = "https://github.com/SainsburyWellcomeCentre/aeon_raw_compression/issues"
 
 [build-system]
 requires = ["hatchling"]
