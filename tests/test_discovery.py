@@ -1,13 +1,12 @@
 """Unit tests for aeon_raw_compression.discovery.
 
-Completeness (successor rule + final-chunk epoch-finished/quiescent guard),
-scoping, dedup, and probe-param population. ``is_epoch_finished`` and
-``is_quiescent`` are injected so the tests are deterministic (no clock waits).
+Completeness (a file is eligible once its mtime is at least ``min_age_s`` in the
+past), scoping, dedup, probe-param population, and anomaly reporting. Tests that
+don't care about the age gate pass ``min_age_s=0`` (every file counts as old
+enough); the two age-specific tests drive the fixture's ``mtime_age_s`` instead.
 """
 
 import json
-import os
-import time
 
 import pytest
 
@@ -15,52 +14,29 @@ from aeon_raw_compression.discovery import RawFileRecord, discover_raw_files
 from tests.fixtures.synthetic_ephys import make_epoch
 
 
-def _ALWAYS(*_):
-    return True
-
-
-def _NEVER(*_):
-    return False
-
-
-def test_unfinished_epoch_skips_final_chunk(tmp_path):
+def test_file_untouched_long_enough_is_eligible(tmp_path):
     make_epoch(
         tmp_path, "AEONX1/exp", "2026-05-11T07-50-11", "NeuropixelsV2",
-        ["ProbeA"], n_chunks=3, finished=False,
+        ["ProbeA"], n_chunks=2, n_channels=8, mtime_age_s=7200,
     )
-    recs = discover_raw_files(
-        tmp_path / "AEONX1/exp", is_epoch_finished=_NEVER, is_quiescent=_ALWAYS,
-    )
-    names = sorted(r.file_name for r in recs)
-    assert names == [
+    recs = discover_raw_files(tmp_path / "AEONX1/exp", experiment_path="AEONX1/exp")
+    # Every chunk whose mtime is old enough registers -- no successor-rule
+    # exclusion of the final chunk anymore.
+    assert sorted(r.file_name for r in recs) == [
         "NeuropixelsV2_ProbeA_AmplifierData_0.bin",
         "NeuropixelsV2_ProbeA_AmplifierData_1.bin",
-    ]  # _2 is the final chunk; excluded because the epoch is not finished
+    ]
 
 
-def test_includes_final_chunk_when_finished_and_quiescent(tmp_path):
+def test_recently_modified_file_is_held(tmp_path):
     make_epoch(
         tmp_path, "AEONX1/exp", "2026-05-11T07-50-11", "NeuropixelsV2",
-        ["ProbeA"], n_chunks=3, finished=True,
+        ["ProbeA"], n_chunks=2, n_channels=8, mtime_age_s=0,  # just written
     )
     recs = discover_raw_files(
-        tmp_path / "AEONX1/exp", is_epoch_finished=_ALWAYS, is_quiescent=_ALWAYS,
+        tmp_path / "AEONX1/exp", experiment_path="AEONX1/exp", min_age_s=3600,
     )
-    names = sorted(r.file_name for r in recs)
-    assert len(names) == 3
-    assert names[-1] == "NeuropixelsV2_ProbeA_AmplifierData_2.bin"
-
-
-def test_excludes_final_chunk_when_not_quiescent(tmp_path):
-    make_epoch(
-        tmp_path, "AEONX1/exp", "e", "NeuropixelsV2", ["ProbeA"],
-        n_chunks=2, finished=True,
-    )
-    recs = discover_raw_files(
-        tmp_path / "AEONX1/exp", is_epoch_finished=_ALWAYS, is_quiescent=_NEVER,
-    )
-    names = sorted(r.file_name for r in recs)
-    assert names == ["NeuropixelsV2_ProbeA_AmplifierData_0.bin"]  # _1 final, not quiescent
+    assert recs == []  # nothing is old enough -> possibly still uploading
 
 
 def test_dedup_against_already_registered(tmp_path):
@@ -68,13 +44,10 @@ def test_dedup_against_already_registered(tmp_path):
         tmp_path, "AEONX1/exp", "e", "NeuropixelsV2", ["ProbeA"],
         n_chunks=3, finished=True,
     )
-    recs = discover_raw_files(
-        tmp_path / "AEONX1/exp", is_epoch_finished=_ALWAYS, is_quiescent=_ALWAYS,
-    )
+    recs = discover_raw_files(tmp_path / "AEONX1/exp", min_age_s=0)
     seen = {recs[0].file_path}
     recs2 = discover_raw_files(
-        tmp_path / "AEONX1/exp", already_registered=seen,
-        is_epoch_finished=_ALWAYS, is_quiescent=_ALWAYS,
+        tmp_path / "AEONX1/exp", already_registered=seen, min_age_s=0,
     )
     assert recs[0].file_path not in {r.file_path for r in recs2}
     assert len(recs2) == len(recs) - 1
@@ -90,8 +63,7 @@ def test_scoping_to_epoch_path(tmp_path):
         n_chunks=2, finished=True,
     )
     recs = discover_raw_files(
-        tmp_path / "AEONX1/exp", epoch_path="epoch-1",
-        is_epoch_finished=_ALWAYS, is_quiescent=_ALWAYS,
+        tmp_path / "AEONX1/exp", epoch_path="epoch-1", min_age_s=0,
     )
     assert {r.epoch_dir for r in recs} == {"epoch-1"}
 
@@ -101,9 +73,7 @@ def test_records_carry_probe_params(tmp_path):
         tmp_path, "AEONX1/exp", "e", "NeuropixelsV2", ["ProbeA"],
         n_chunks=2, n_channels=8, finished=True,
     )
-    recs = discover_raw_files(
-        tmp_path / "AEONX1/exp", is_epoch_finished=_ALWAYS, is_quiescent=_ALWAYS,
-    )
+    recs = discover_raw_files(tmp_path / "AEONX1/exp", min_age_s=0)
     assert recs and all(isinstance(r, RawFileRecord) for r in recs)
     r = recs[0]
     assert r.num_channels == 8
@@ -125,39 +95,8 @@ def test_disabled_probe_is_skipped(tmp_path):
     meta["Devices"]["ProbeA"] = "false"
     meta_path.write_text(json.dumps(meta))
 
-    recs = discover_raw_files(
-        tmp_path / "AEONX1/exp", is_epoch_finished=_ALWAYS, is_quiescent=_ALWAYS,
-    )
+    recs = discover_raw_files(tmp_path / "AEONX1/exp", min_age_s=0)
     assert recs == []
-
-
-def test_default_epoch_finished_ignores_non_timestamp_sibling(tmp_path):
-    # A non-timestamp sibling (like golden_test_sorting) must NOT mark the epoch
-    # finished, so the final chunk stays excluded under the default detector.
-    exp = make_epoch(
-        tmp_path, "AEONX1/exp", "2026-05-11T07-50-11", "NeuropixelsV2",
-        ["ProbeA"], n_chunks=2, finished=False, n_channels=8,
-    )
-    (exp / "golden_test_sorting").mkdir()
-
-    recs = discover_raw_files(exp, is_quiescent=_ALWAYS)  # default is_epoch_finished
-    names = sorted(r.file_name for r in recs)
-    assert names == ["NeuropixelsV2_ProbeA_AmplifierData_0.bin"]  # _1 (final) excluded
-
-
-def test_default_epoch_finished_accepts_newer_timestamp_sibling(tmp_path):
-    exp = make_epoch(
-        tmp_path, "AEONX1/exp", "2026-05-11T07-50-11", "NeuropixelsV2",
-        ["ProbeA"], n_chunks=2, finished=False, n_channels=8,
-    )
-    (exp / "2026-05-12T07-50-11").mkdir()  # a genuinely newer epoch dir
-
-    recs = discover_raw_files(exp, is_quiescent=_ALWAYS)  # default is_epoch_finished
-    names = sorted(r.file_name for r in recs)
-    assert names == [
-        "NeuropixelsV2_ProbeA_AmplifierData_0.bin",
-        "NeuropixelsV2_ProbeA_AmplifierData_1.bin",  # final chunk now included
-    ]
 
 
 def test_numbering_gap_is_reported(tmp_path):
@@ -172,9 +111,7 @@ def test_numbering_gap_is_reported(tmp_path):
     gap.unlink()  # leaves chunks 0 and 2 -> a gap at 1
 
     msgs = []
-    discover_raw_files(
-        exp, on_anomaly=msgs.append, is_epoch_finished=_ALWAYS, is_quiescent=_ALWAYS,
-    )
+    discover_raw_files(exp, on_anomaly=msgs.append, min_age_s=0)
     assert any("Gap" in m and "missing" in m for m in msgs)
 
 
@@ -190,9 +127,7 @@ def test_unparseable_amplifier_name_is_reported(tmp_path):
     (dev / "NeuropixelsV2_AmplifierData_junk.bin").write_bytes(b"\x00" * 16)
 
     msgs = []
-    discover_raw_files(
-        exp, on_anomaly=msgs.append, is_epoch_finished=_ALWAYS, is_quiescent=_ALWAYS,
-    )
+    discover_raw_files(exp, on_anomaly=msgs.append, min_age_s=0)
     assert any("Cannot parse" in m for m in msgs)
 
 
@@ -204,43 +139,9 @@ def test_unexpected_path_structure_is_reported(tmp_path):
     (exp / "NeuropixelsV2_ProbeA_AmplifierData_0.bin").write_bytes(b"\x00" * 16)
 
     msgs = []
-    recs = discover_raw_files(
-        exp, on_anomaly=msgs.append, is_epoch_finished=_ALWAYS, is_quiescent=_ALWAYS,
-    )
+    recs = discover_raw_files(exp, on_anomaly=msgs.append, min_age_s=0)
     assert recs == []
     assert any("Unexpected path structure" in m for m in msgs)
-
-
-def test_default_epoch_finished_via_old_mtime_no_newer_sibling(tmp_path):
-    # The rig's LAST epoch: no newer sibling exists, but everything under it has
-    # been stable for hours -> the final chunk must eventually register.
-    exp = make_epoch(
-        tmp_path, "AEONX1/exp", "2026-05-11T07-50-11", "NeuropixelsV2",
-        ["ProbeA"], n_chunks=2, finished=False, n_channels=8,
-    )
-    epoch_dir = exp / "2026-05-11T07-50-11"
-    old = time.time() - (10 * 3600)  # 10h ago: past both thresholds
-    for p in list(epoch_dir.rglob("*")) + [epoch_dir]:
-        os.utime(p, (old, old))
-
-    recs = discover_raw_files(exp)  # default detectors only
-    names = sorted(r.file_name for r in recs)
-    assert names == [
-        "NeuropixelsV2_ProbeA_AmplifierData_0.bin",
-        "NeuropixelsV2_ProbeA_AmplifierData_1.bin",  # final chunk included via max-age
-    ]
-
-
-def test_recent_last_epoch_still_holds_back_final_chunk(tmp_path):
-    # Same shape but freshly written (not old): no newer sibling, not yet aged
-    # out -> final chunk still excluded (must not compress a possibly-open file).
-    exp = make_epoch(
-        tmp_path, "AEONX1/exp", "2026-05-11T07-50-11", "NeuropixelsV2",
-        ["ProbeA"], n_chunks=2, finished=False, n_channels=8,
-    )
-    recs = discover_raw_files(exp)  # default detectors; files are brand new
-    names = sorted(r.file_name for r in recs)
-    assert names == ["NeuropixelsV2_ProbeA_AmplifierData_0.bin"]
 
 
 def test_file_path_is_not_symlink_resolved(tmp_path):
@@ -257,7 +158,7 @@ def test_file_path_is_not_symlink_resolved(tmp_path):
     except (OSError, NotImplementedError):
         pytest.skip("symlinks not permitted on this platform")
 
-    recs = discover_raw_files(sandbox, is_epoch_finished=_ALWAYS, is_quiescent=_ALWAYS)
+    recs = discover_raw_files(sandbox, min_age_s=0)
     assert recs
     for r in recs:
         assert "sandbox" in r.file_path  # kept the symlink path

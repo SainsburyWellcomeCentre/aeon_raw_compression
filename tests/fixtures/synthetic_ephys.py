@@ -14,6 +14,8 @@ explicit ``num_channels`` here, which the parser honors (see
 """
 
 import json
+import os
+import time
 from pathlib import Path
 
 import numpy as np
@@ -62,6 +64,7 @@ def make_amplifier_chunks(
     n_channels=8,
     dtype="uint16",
     seed=0,
+    mtime_age_s=7200,
 ):
     """Write ``_0 .. _{n_chunks-1}`` AmplifierData/Clock chunk pairs.
 
@@ -70,10 +73,16 @@ def make_amplifier_chunks(
     compression-ratio assertions meaningless. A companion ``Clock_N.bin``
     (uint64) is written alongside each chunk to mirror the real layout (and to
     confirm discovery's glob ignores non-AmplifierData files).
+
+    ``mtime_age_s`` backdates each file's mtime by that many seconds so the
+    files are already "old enough" for discovery's ``min_age_s`` completeness
+    rule (default is well over the 1 h production threshold). Pass ``0`` to model
+    a freshly-written / still-uploading file that discovery should hold back.
     """
     device_dir = Path(device_dir)
     device_dir.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(seed)
+    old = time.time() - mtime_age_s
     paths = []
     for n in range(n_chunks):
         ramp = (np.arange(n_samples, dtype=np.int64)[:, None] % 4000)
@@ -85,6 +94,8 @@ def make_amplifier_chunks(
         clock_path = device_dir / f"{device_name}_{probe_label}_Clock_{n}.bin"
         np.arange(n_samples, dtype=np.uint64).tofile(clock_path)
 
+        os.utime(amp_path, (old, old))
+        os.utime(clock_path, (old, old))
         paths.append(amp_path)
     return paths
 
@@ -100,6 +111,7 @@ def make_epoch(
     finished=True,
     n_samples=200,
     n_channels=8,
+    mtime_age_s=7200,
 ):
     """Build a full synthetic epoch: ``root/experiment/epoch/{Metadata.yml,device/chunks}``.
 
@@ -124,6 +136,7 @@ def make_epoch(
             n_chunks,
             n_samples=n_samples,
             n_channels=n_channels,
+            mtime_age_s=mtime_age_s,
         )
 
     if finished:
