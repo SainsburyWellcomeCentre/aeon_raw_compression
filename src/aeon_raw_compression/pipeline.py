@@ -43,6 +43,13 @@ DELETION_ENABLED = False
 DEFAULT_RAW_DATA_ROOT = "/ceph/aeon/aeon/data/raw"
 RAW_DATA_ROOT = DEFAULT_RAW_DATA_ROOT
 
+# Default Ceph processed-data root. The compressed zarr is written here (NOT
+# beside the raw .bin), mirroring the raw sub-path, so the raw store can stay
+# read-only. CONFIRM the exact path on Ceph before production use. Override via
+# :func:`activate`.
+DEFAULT_PROCESSED_DATA_ROOT = "/ceph/aeon/aeon/data/processed"
+PROCESSED_DATA_ROOT = DEFAULT_PROCESSED_DATA_ROOT
+
 # Deferred schema -- not activated until activate() is called.
 schema = dj.Schema()
 
@@ -149,7 +156,7 @@ class CompressedFile(dj.Computed):
     # Compress a raw file to zarr and verify a byte-exact round-trip (atomic).
     -> RawEphysDiscovery.RawEphysFile
     ---
-    zarr_path             : varchar(512)  # zarr directory on Ceph (same stem as .bin)
+    zarr_path             : varchar(512)  # zarr dir under the processed root (same stem as .bin)
     compressed_size_bytes : int64
     compression_ratio     : float64       # original / compressed
     compression_time_s    : float64
@@ -164,7 +171,10 @@ class CompressedFile(dj.Computed):
     def make(self, key):
         raw = (RawEphysDiscovery.RawEphysFile & key).fetch1()
         bin_path = Path(raw["file_path"])
-        zarr_path = bin_path.with_suffix(".zarr")  # same stem, .zarr extension
+        # Write the zarr under the processed root (mirroring the raw sub-path),
+        # never beside the read-only raw .bin.
+        zarr_path = _processed_zarr_path(bin_path)
+        zarr_path.parent.mkdir(parents=True, exist_ok=True)
 
         result = compress_to_zarr(
             bin_path, zarr_path, raw["num_channels"], raw["sampling_frequency"]
@@ -237,7 +247,14 @@ class OriginalDeletion(dj.Computed):
         )
 
 
-def activate(prefix=None, *, raw_data_root=None, create_schema=True, create_tables=True):
+def activate(
+    prefix=None,
+    *,
+    raw_data_root=None,
+    processed_data_root=None,
+    create_schema=True,
+    create_tables=True,
+):
     """Activate the compression schema under the project's own DataJoint prefix.
 
     Args:
@@ -246,11 +263,15 @@ def activate(prefix=None, *, raw_data_root=None, create_schema=True, create_tabl
             The schema name is ``f"{prefix}_aeon_raw_compression"``.
         raw_data_root: Optional override for the Ceph raw-data root used to
             resolve relative trigger ``experiment_path`` values.
+        processed_data_root: Optional override for the Ceph processed-data root
+            the compressed zarr is written under.
         create_schema, create_tables: Passed through to ``schema.activate``.
     """
-    global RAW_DATA_ROOT
+    global RAW_DATA_ROOT, PROCESSED_DATA_ROOT
     if raw_data_root is not None:
         RAW_DATA_ROOT = str(raw_data_root)
+    if processed_data_root is not None:
+        PROCESSED_DATA_ROOT = str(processed_data_root)
     if prefix is None:
         prefix = dj.config.database.database_prefix
     schema.activate(
@@ -278,3 +299,21 @@ def _resolve_experiment_dir(experiment_path):
     """
     path = Path(experiment_path)
     return path if path.is_absolute() else Path(RAW_DATA_ROOT) / path
+
+
+def _processed_zarr_path(bin_path):
+    """Re-root a raw ``.bin`` path under :data:`PROCESSED_DATA_ROOT`, as a ``.zarr``.
+
+    Mirrors the raw sub-path so the read-side resolver (companion aeon_mecha PR)
+    can find the zarr by the same relative path under the processed root. The
+    zarr is written to the processed store, never beside the read-only raw file.
+    """
+    bin_path = Path(bin_path)
+    raw_root = Path(RAW_DATA_ROOT)
+    try:
+        rel = bin_path.relative_to(raw_root)
+    except ValueError as e:
+        raise ValueError(
+            f"{bin_path} is not under RAW_DATA_ROOT ({raw_root}); cannot map to processed"
+        ) from e
+    return (Path(PROCESSED_DATA_ROOT) / rel).with_suffix(".zarr")

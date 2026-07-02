@@ -14,11 +14,15 @@ the raw store. The final test drives the WHOLE pipeline on a *copy* of one real
 chunk and runs only when ``AEON_REAL_CHUNK`` points at a real
 ``*_AmplifierData_*.bin`` (compute node, roomy ``--basetemp``).
 
-Determinism note: ``RawEphysDiscovery.make`` uses discovery's *default*
-completeness rule. Freshly-written synthetic files are not yet "quiescent" (the
-threshold is ~30 min), so the **final** chunk of each probe family is excluded
-and only the successor-covered chunks register. The assertions below rely on
-exactly that behavior -- e.g. 3 chunks -> 2 registered (``_0``, ``_1``).
+Completeness note: ``RawEphysDiscovery.make`` uses discovery's default rule --
+a file registers once its mtime is at least 1 h in the past. The synthetic
+fixture backdates chunk mtimes (``make_epoch`` default), so **all** chunks are
+eligible and register (there is no successor-rule exclusion of the final chunk).
+
+Root note: compress writes the zarr under ``PROCESSED_DATA_ROOT``, re-rooted from
+``RAW_DATA_ROOT``. Tests that compress build the epoch under a ``raw`` root and
+point both roots at tmp dirs via ``_use_roots`` so ``_processed_zarr_path`` can
+map raw -> processed.
 """
 
 import os
@@ -60,6 +64,20 @@ def _place_trigger(experiment_dir, placed_by, trigger_time):
     )
 
 
+def _use_roots(monkeypatch, tmp_path):
+    """Point RAW/PROCESSED roots at tmp dirs (for tests that compress).
+
+    Invariant: build the epoch under the returned ``raw`` dir so every registered
+    ``bin_path`` is under ``RAW_DATA_ROOT`` and ``_processed_zarr_path`` can map
+    it to the ``processed`` root. Re-rooting keys off ``RAW_DATA_ROOT``, not the
+    trigger path, so the trigger may still carry the absolute experiment dir.
+    """
+    raw, proc = tmp_path / "raw", tmp_path / "processed"
+    monkeypatch.setattr(pipeline, "RAW_DATA_ROOT", str(raw))
+    monkeypatch.setattr(pipeline, "PROCESSED_DATA_ROOT", str(proc))
+    return raw, proc
+
+
 def test_discovery_registers_complete_files(activated_schema, tmp_path):
     import datetime
 
@@ -74,21 +92,24 @@ def test_discovery_registers_complete_files(activated_schema, tmp_path):
 
     files = pipeline.RawEphysDiscovery.RawEphysFile & {"placed_by": placed_by}
     names = sorted(files.to_arrays("file_name"))
-    # _2 is the final chunk; fresh files are not quiescent yet -> excluded.
+    # All chunks' mtimes are backdated by the fixture, so all 3 are old enough
+    # to register (no successor-rule exclusion of the final chunk anymore).
     assert names == [
         "NeuropixelsV2_ProbeA_AmplifierData_0.bin",
         "NeuropixelsV2_ProbeA_AmplifierData_1.bin",
+        "NeuropixelsV2_ProbeA_AmplifierData_2.bin",
     ]
     assert (
         pipeline.RawEphysDiscovery & {"placed_by": placed_by}
-    ).fetch1("num_files_found") == 2
+    ).fetch1("num_files_found") == 3
 
 
-def test_compression_produces_verified_rows(activated_schema, tmp_path):
+def test_compression_produces_verified_rows(activated_schema, tmp_path, monkeypatch):
     import datetime
 
+    raw, proc = _use_roots(monkeypatch, tmp_path)
     experiment_dir = make_epoch(
-        tmp_path, "AEONX1/intexp_comp", "2026-05-11T08-00-00", "NeuropixelsV2",
+        raw, "AEONX1/intexp_comp", "2026-05-11T08-00-00", "NeuropixelsV2",
         ["ProbeA"], n_chunks=3, finished=True, n_channels=8,
     )
     placed_by = "comp_user"
@@ -98,12 +119,13 @@ def test_compression_produces_verified_rows(activated_schema, tmp_path):
     pipeline.CompressedFile.populate({"placed_by": placed_by})
 
     rows = (pipeline.CompressedFile & {"placed_by": placed_by}).to_dicts()
-    assert len(rows) == 2  # the two complete (non-final) chunks
+    assert len(rows) == 3  # all chunks are old enough to register + compress
     for row in rows:
         assert bool(row["checksum_match"]) is True
         assert row["codec_name"] == "blosc-zstd-5-bitshuffle"
         assert row["compression_ratio"] > 1.0
         assert row["num_samples"] == 200
+        assert row["zarr_path"].startswith(str(proc))  # written under processed root
         assert row["zarr_path"].endswith(".zarr")
 
 
@@ -170,11 +192,12 @@ def test_discovery_persists_anomalies(activated_schema, tmp_path):
     assert "Gap" in row["anomalies"]
 
 
-def test_deletion_refuses_while_disabled(activated_schema, tmp_path):
+def test_deletion_refuses_while_disabled(activated_schema, tmp_path, monkeypatch):
     import datetime
 
+    raw, proc = _use_roots(monkeypatch, tmp_path)
     experiment_dir = make_epoch(
-        tmp_path, "AEONX1/intexp_del", "2026-05-11T11-00-00", "NeuropixelsV2",
+        raw, "AEONX1/intexp_del", "2026-05-11T11-00-00", "NeuropixelsV2",
         ["ProbeA"], n_chunks=2, finished=True, n_channels=8,
     )
     placed_by = "del_user"
@@ -197,8 +220,9 @@ def test_failed_verification_inserts_no_row_and_removes_zarr(
 
     from aeon_raw_compression import compression
 
+    raw, proc = _use_roots(monkeypatch, tmp_path)
     experiment_dir = make_epoch(
-        tmp_path, "AEONX1/intexp_failverify", "2026-05-11T13-00-00", "NeuropixelsV2",
+        raw, "AEONX1/intexp_failverify", "2026-05-11T13-00-00", "NeuropixelsV2",
         ["ProbeA"], n_chunks=3, finished=True, n_channels=8,
     )
     placed_by = "failv_user"
@@ -216,8 +240,10 @@ def test_failed_verification_inserts_no_row_and_removes_zarr(
     pipeline.CompressedFile.populate({"placed_by": placed_by}, suppress_errors=True)
 
     assert len(pipeline.CompressedFile & {"placed_by": placed_by}) == 0
-    # The untrusted zarr must have been removed so a retry starts clean.
-    assert list(Path(experiment_dir).rglob("*.zarr")) == []
+    # The untrusted zarr must have been removed so a retry starts clean. It is
+    # written under the processed root, so check there (NOT under experiment_dir,
+    # which is under raw and would be vacuously empty of zarr).
+    assert list(Path(proc).rglob("*.zarr")) == []
 
 
 def test_deletion_deletes_original_and_is_idempotent(activated_schema, tmp_path, monkeypatch):
@@ -227,8 +253,9 @@ def test_deletion_deletes_original_and_is_idempotent(activated_schema, tmp_path,
     import datetime
     from pathlib import Path
 
+    raw, proc = _use_roots(monkeypatch, tmp_path)
     experiment_dir = make_epoch(
-        tmp_path, "AEONX1/intexp_delok", "2026-05-11T14-00-00", "NeuropixelsV2",
+        raw, "AEONX1/intexp_delok", "2026-05-11T14-00-00", "NeuropixelsV2",
         ["ProbeA"], n_chunks=3, finished=True, n_channels=8,
     )
     placed_by = "delok_user"

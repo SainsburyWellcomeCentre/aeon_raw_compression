@@ -9,6 +9,7 @@ HPC integration tests (Task 8), not here.
 from pathlib import Path
 
 import datajoint as dj
+import pytest
 
 from aeon_raw_compression import pipeline
 
@@ -53,3 +54,24 @@ def test_resolve_experiment_dir_relative_vs_absolute(tmp_path):
     # untested (the integration tests all pass absolute dirs).
     resolved = pipeline._resolve_experiment_dir("AEONX1/exp")
     assert resolved == Path(pipeline.RAW_DATA_ROOT) / "AEONX1/exp"
+
+
+def test_processed_zarr_path_reroots_raw_to_processed(monkeypatch):
+    monkeypatch.setattr(pipeline, "RAW_DATA_ROOT", "/data/raw")
+    monkeypatch.setattr(pipeline, "PROCESSED_DATA_ROOT", "/data/processed")
+    bin_path = (
+        "/data/raw/AEONX1/exp/2026-05-11T07-50-11/NeuropixelsV2/"
+        "NeuropixelsV2_ProbeB_AmplifierData_0.bin"
+    )
+    out = pipeline._processed_zarr_path(bin_path)
+    assert out.as_posix() == (
+        "/data/processed/AEONX1/exp/2026-05-11T07-50-11/NeuropixelsV2/"
+        "NeuropixelsV2_ProbeB_AmplifierData_0.zarr"
+    )
+
+
+def test_processed_zarr_path_rejects_path_outside_raw_root(monkeypatch):
+    monkeypatch.setattr(pipeline, "RAW_DATA_ROOT", "/data/raw")
+    monkeypatch.setattr(pipeline, "PROCESSED_DATA_ROOT", "/data/processed")
+    with pytest.raises(ValueError):
+        pipeline._processed_zarr_path("/somewhere/else/foo.bin")
