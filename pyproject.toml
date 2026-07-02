@@ -33,7 +33,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff", "jupytext", "matplotlib", "build", "hatchling"]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "ruff",
+    "pre-commit",
+    "codespell",
+    "jupytext",
+    "matplotlib",
+    "build",
+    "hatchling",
+]
 
 [project.urls]
 Homepage = "https://github.com/SainsburyWellcomeCentre/aeon_raw_compression"
@@ -51,6 +61,10 @@ packages = ["src/aeon_raw_compression"]
 line-length = 100
 target-version = "py311"
 
+[tool.ruff.format]
+# Keep line-length 100 (set under [tool.ruff]); format code blocks in docstrings.
+docstring-code-format = true
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B"]
 
@@ -64,3 +78,10 @@ markers = [
     "integration: requires aeondj + real data; run on the HPC, not locally",
 ]
 testpaths = ["tests"]
+
+[tool.codespell]
+# Config for the codespell pre-commit hook. Skip generated/binary/vendored dirs.
+skip = ".git,*.lock,uv.lock,.venv,build,dist"
+check-hidden = true
+# "unparseable" is a valid variant spelling we use deliberately (probe/chunk name).
+ignore-words-list = "unparseable"

@@ -83,9 +83,7 @@ def discover_raw_files(
     """
     experiment_dir = Path(experiment_dir)
     experiment_path = experiment_path or experiment_dir.name
-    is_complete = is_complete or (
-        lambda f: (time.time() - Path(f).stat().st_mtime) >= min_age_s
-    )
+    is_complete = is_complete or (lambda f: (time.time() - Path(f).stat().st_mtime) >= min_age_s)
     on_anomaly = on_anomaly or logger.warning
     already = set(already_registered)
 
@@ -93,9 +91,7 @@ def discover_raw_files(
     if not scan_root.exists():
         return []
 
-    amp_files = sorted(
-        scan_root.rglob("*_AmplifierData*.bin"), key=lambda p: p.as_posix()
-    )
+    amp_files = sorted(scan_root.rglob("*_AmplifierData*.bin"), key=lambda p: p.as_posix())
 
     # Group by (device directory, probe label) -> {chunk_number: path}. The
     # successor rule applies within a single probe's chunk family.
@@ -149,9 +145,7 @@ def discover_raw_files(
 
         cache_key = (epoch_dir, device_name, probe_label)
         if cache_key not in params_cache:
-            params_cache[cache_key] = read_probe_params(
-                metadata_path, device_name, probe_label
-            )
+            params_cache[cache_key] = read_probe_params(metadata_path, device_name, probe_label)
         params = params_cache[cache_key]
 
         records.append(
@@ -176,6 +170,5 @@ def _flag_numbering_gaps(groups, on_anomaly):
         missing = sorted(set(range(nums[0], nums[-1] + 1)) - set(nums))
         if missing:
             on_anomaly(
-                f"Gap in chunk numbering for {device_dir.name}/{probe_label}: "
-                f"missing {missing}"
+                f"Gap in chunk numbering for {device_dir.name}/{probe_label}: missing {missing}"
             )

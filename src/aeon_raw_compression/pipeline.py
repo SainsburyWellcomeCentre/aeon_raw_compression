@@ -235,9 +235,7 @@ class RawEphysFileDeletion(dj.Computed):
         compressed = (CompressedFile & key).fetch1()
         if not compressed["checksum_match"]:
             # Defensive: every CompressedFile row is verified by construction.
-            raise RuntimeError(
-                f"refusing to delete {key}: CompressedFile.checksum_match is False"
-            )
+            raise RuntimeError(f"refusing to delete {key}: CompressedFile.checksum_match is False")
 
         raw = (RawEphysDiscovery.RawEphysFile & key).fetch1()
         bin_path = Path(raw["file_path"])

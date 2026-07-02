@@ -82,8 +82,14 @@ def test_discovery_registers_complete_files(activated_schema, tmp_path):
     import datetime
 
     experiment_dir = make_epoch(
-        tmp_path, "AEONX1/intexp_disc", "2026-05-11T07-50-11", "NeuropixelsV2",
-        ["ProbeA"], n_chunks=3, finished=True, n_channels=8,
+        tmp_path,
+        "AEONX1/intexp_disc",
+        "2026-05-11T07-50-11",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=3,
+        finished=True,
+        n_channels=8,
     )
     placed_by = "disc_user"
     _place_trigger(experiment_dir, placed_by, datetime.datetime(2026, 6, 26, 1, 0, 0))
@@ -99,9 +105,7 @@ def test_discovery_registers_complete_files(activated_schema, tmp_path):
         "NeuropixelsV2_ProbeA_AmplifierData_1.bin",
         "NeuropixelsV2_ProbeA_AmplifierData_2.bin",
     ]
-    assert (
-        pipeline.RawEphysDiscovery & {"placed_by": placed_by}
-    ).fetch1("num_files_found") == 3
+    assert (pipeline.RawEphysDiscovery & {"placed_by": placed_by}).fetch1("num_files_found") == 3
 
 
 def test_compression_produces_verified_rows(activated_schema, tmp_path, monkeypatch):
@@ -109,8 +113,14 @@ def test_compression_produces_verified_rows(activated_schema, tmp_path, monkeypa
 
     raw, proc = _use_roots(monkeypatch, tmp_path)
     experiment_dir = make_epoch(
-        raw, "AEONX1/intexp_comp", "2026-05-11T08-00-00", "NeuropixelsV2",
-        ["ProbeA"], n_chunks=3, finished=True, n_channels=8,
+        raw,
+        "AEONX1/intexp_comp",
+        "2026-05-11T08-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=3,
+        finished=True,
+        n_channels=8,
     )
     placed_by = "comp_user"
     _place_trigger(experiment_dir, placed_by, datetime.datetime(2026, 6, 26, 2, 0, 0))
@@ -133,12 +143,24 @@ def test_placed_by_restriction_registers_only_that_users_files(activated_schema,
     import datetime
 
     alice_dir = make_epoch(
-        tmp_path, "AEONX1/intexp_alice", "2026-05-11T09-00-00", "NeuropixelsV2",
-        ["ProbeA"], n_chunks=2, finished=True, n_channels=8,
+        tmp_path,
+        "AEONX1/intexp_alice",
+        "2026-05-11T09-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=2,
+        finished=True,
+        n_channels=8,
     )
     bob_dir = make_epoch(
-        tmp_path, "AEONX1/intexp_bob", "2026-05-11T10-00-00", "NeuropixelsV2",
-        ["ProbeA"], n_chunks=2, finished=True, n_channels=8,
+        tmp_path,
+        "AEONX1/intexp_bob",
+        "2026-05-11T10-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=2,
+        finished=True,
+        n_channels=8,
     )
     _place_trigger(alice_dir, "alice", datetime.datetime(2026, 6, 26, 3, 0, 0))
     _place_trigger(bob_dir, "bob", datetime.datetime(2026, 6, 26, 3, 0, 0))
@@ -155,8 +177,14 @@ def test_overlapping_triggers_do_not_double_register(activated_schema, tmp_path)
     import datetime
 
     experiment_dir = make_epoch(
-        tmp_path, "AEONX1/intexp_overlap", "2026-05-11T12-00-00", "NeuropixelsV2",
-        ["ProbeA"], n_chunks=3, finished=True, n_channels=8,
+        tmp_path,
+        "AEONX1/intexp_overlap",
+        "2026-05-11T12-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=3,
+        finished=True,
+        n_channels=8,
     )
     _place_trigger(experiment_dir, "ov_user", datetime.datetime(2026, 6, 26, 5, 0, 0))
     _place_trigger(experiment_dir, "ov_user", datetime.datetime(2026, 6, 26, 5, 0, 1))
@@ -174,11 +202,19 @@ def test_discovery_persists_anomalies(activated_schema, tmp_path):
     import datetime
 
     experiment_dir = make_epoch(
-        tmp_path, "AEONX1/intexp_anom", "2026-05-11T12-30-00", "NeuropixelsV2",
-        ["ProbeA"], n_chunks=3, finished=True, n_channels=8,
+        tmp_path,
+        "AEONX1/intexp_anom",
+        "2026-05-11T12-30-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=3,
+        finished=True,
+        n_channels=8,
     )
     gap = (
-        experiment_dir / "2026-05-11T12-30-00" / "NeuropixelsV2"
+        experiment_dir
+        / "2026-05-11T12-30-00"
+        / "NeuropixelsV2"
         / "NeuropixelsV2_ProbeA_AmplifierData_1.bin"
     )
     gap.unlink()  # leaves chunks 0 and 2 -> a numbering gap at 1
@@ -197,8 +233,14 @@ def test_deletion_refuses_while_disabled(activated_schema, tmp_path, monkeypatch
 
     raw, proc = _use_roots(monkeypatch, tmp_path)
     experiment_dir = make_epoch(
-        raw, "AEONX1/intexp_del", "2026-05-11T11-00-00", "NeuropixelsV2",
-        ["ProbeA"], n_chunks=2, finished=True, n_channels=8,
+        raw,
+        "AEONX1/intexp_del",
+        "2026-05-11T11-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=2,
+        finished=True,
+        n_channels=8,
     )
     placed_by = "del_user"
     _place_trigger(experiment_dir, placed_by, datetime.datetime(2026, 6, 26, 4, 0, 0))
@@ -222,8 +264,14 @@ def test_failed_verification_inserts_no_row_and_removes_zarr(
 
     raw, proc = _use_roots(monkeypatch, tmp_path)
     experiment_dir = make_epoch(
-        raw, "AEONX1/intexp_failverify", "2026-05-11T13-00-00", "NeuropixelsV2",
-        ["ProbeA"], n_chunks=3, finished=True, n_channels=8,
+        raw,
+        "AEONX1/intexp_failverify",
+        "2026-05-11T13-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=3,
+        finished=True,
+        n_channels=8,
     )
     placed_by = "failv_user"
     _place_trigger(experiment_dir, placed_by, datetime.datetime(2026, 6, 26, 6, 0, 0))
@@ -255,8 +303,14 @@ def test_deletion_deletes_original_and_is_idempotent(activated_schema, tmp_path,
 
     raw, proc = _use_roots(monkeypatch, tmp_path)
     experiment_dir = make_epoch(
-        raw, "AEONX1/intexp_delok", "2026-05-11T14-00-00", "NeuropixelsV2",
-        ["ProbeA"], n_chunks=3, finished=True, n_channels=8,
+        raw,
+        "AEONX1/intexp_delok",
+        "2026-05-11T14-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=3,
+        finished=True,
+        n_channels=8,
     )
     placed_by = "delok_user"
     _place_trigger(experiment_dir, placed_by, datetime.datetime(2026, 6, 26, 7, 0, 0))
@@ -287,9 +341,7 @@ def test_deletion_deletes_original_and_is_idempotent(activated_schema, tmp_path,
     not os.environ.get("AEON_REAL_CHUNK"),
     reason="set AEON_REAL_CHUNK to a real *_AmplifierData_*.bin (enabled probe) to run this",
 )
-def test_real_chunk_full_pipeline_roundtrip_and_deletion(
-    activated_schema, tmp_path, monkeypatch
-):
+def test_real_chunk_full_pipeline_roundtrip_and_deletion(activated_schema, tmp_path, monkeypatch):
     """The holistic real-data test: the WHOLE pipeline, on a copy of one real chunk.
 
     This is the single artifact behind "if the tests pass, it works for everyone".
@@ -346,9 +398,7 @@ def test_real_chunk_full_pipeline_roundtrip_and_deletion(
     pipeline.RawEphysDiscovery.populate({"placed_by": placed_by}, suppress_errors=False)
 
     # The one real chunk registers (its mtime is old); nothing else is present.
-    registered = (
-        pipeline.RawEphysDiscovery.RawEphysFile & {"placed_by": placed_by}
-    ).to_dicts()
+    registered = (pipeline.RawEphysDiscovery.RawEphysFile & {"placed_by": placed_by}).to_dicts()
     assert [r["file_name"] for r in registered] == [src_chunk.name]
     # Independent check that the channel count parsed from the real Metadata.yml
     # fits the real file (a wrong-but-consistent count would still round-trip, so

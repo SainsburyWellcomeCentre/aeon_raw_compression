@@ -152,9 +152,7 @@ def test_compress_forwards_chunk_duration(tmp_path, monkeypatch):
     b.write_bytes(b"\x00" * 32)
     z = tmp_path / "Dev_ProbeA_AmplifierData_0.zarr"
 
-    compress_to_zarr(
-        b, z, num_channels=8, sampling_frequency=30000, chunk_duration_s=10
-    )
+    compress_to_zarr(b, z, num_channels=8, sampling_frequency=30000, chunk_duration_s=10)
     assert captured["chunk_duration"] == "10s"  # forwarded as an SI duration string
 
 

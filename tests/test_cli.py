@@ -16,9 +16,7 @@ from aeon_raw_compression.cli import (
 
 def test_build_trigger_row_with_explicit_time():
     t = datetime.datetime(2026, 6, 26, 14, 0, 0)
-    row = build_trigger_row(
-        "AEONX1/exp", "elissa", epoch="2026-05-11T07-50-11", trigger_time=t
-    )
+    row = build_trigger_row("AEONX1/exp", "elissa", epoch="2026-05-11T07-50-11", trigger_time=t)
     assert row == {
         "trigger_time": t,
         "placed_by": "elissa",

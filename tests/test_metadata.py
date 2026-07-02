@@ -58,9 +58,7 @@ def test_selects_configuration_b_for_probe_b(tmp_path):
     meta["Devices"]["NeuropixelsV2e"]["ConfigurationB"] = {"NumberOfChannels": 16}
     meta_path.write_text(json.dumps(meta))
 
-    params = read_probe_params(
-        meta_path, device_name="NeuropixelsV2", probe_label="ProbeB"
-    )
+    params = read_probe_params(meta_path, device_name="NeuropixelsV2", probe_label="ProbeB")
     assert params.num_channels == 16
 
 
@@ -81,9 +79,7 @@ def test_reads_top_level_sample_rate_when_config_has_none(tmp_path):
     meta["SampleRate"] = "30000"
     meta_path.write_text(json.dumps(meta))
 
-    params = read_probe_params(
-        meta_path, device_name="NeuropixelsV2", probe_label="ProbeA"
-    )
+    params = read_probe_params(meta_path, device_name="NeuropixelsV2", probe_label="ProbeA")
     assert params.sampling_frequency == 30000.0
 
 
@@ -94,17 +90,13 @@ def test_config_sampling_frequency_overrides_top_level(tmp_path):
     meta["SampleRate"] = "30000"  # top-level present, but config wins
     meta_path.write_text(json.dumps(meta))
 
-    params = read_probe_params(
-        meta_path, device_name="NeuropixelsV2", probe_label="ProbeA"
-    )
+    params = read_probe_params(meta_path, device_name="NeuropixelsV2", probe_label="ProbeA")
     assert params.sampling_frequency == 25000.0
 
 
 def test_probe_enabled_reads_string_flag(tmp_path):
     meta_path = tmp_path / "Metadata.yml"
-    meta_path.write_text(
-        json.dumps({"Devices": {"ProbeA": "false", "ProbeB": "true"}})
-    )
+    meta_path.write_text(json.dumps({"Devices": {"ProbeA": "false", "ProbeB": "true"}}))
     assert probe_enabled(meta_path, "ProbeB") is True
     assert probe_enabled(meta_path, "ProbeA") is False
     # Absent flag -> assume enabled.

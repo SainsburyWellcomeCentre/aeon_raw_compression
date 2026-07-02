@@ -85,7 +85,7 @@ def make_amplifier_chunks(
     old = time.time() - mtime_age_s
     paths = []
     for n in range(n_chunks):
-        ramp = (np.arange(n_samples, dtype=np.int64)[:, None] % 4000)
+        ramp = np.arange(n_samples, dtype=np.int64)[:, None] % 4000
         noise = rng.integers(-3, 4, size=(n_samples, n_channels))
         data = ((ramp + noise) % 4000).astype(dtype)
         amp_path = device_dir / f"{device_name}_{probe_label}_AmplifierData_{n}.bin"

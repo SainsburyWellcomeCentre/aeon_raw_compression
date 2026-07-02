@@ -44,9 +44,7 @@ DEFAULT_N_JOBS = int(os.environ.get("AEON_RAW_COMPRESSION_N_JOBS", "1"))
 # zarr 2 (zarr-3 sharding would be better but needs SpikeInterface zarr-3
 # support, which doesn't exist yet -- see SpikeInterface issue #4014). Tune on
 # Ceph. Env-overridable.
-DEFAULT_CHUNK_DURATION_S = float(
-    os.environ.get("AEON_RAW_COMPRESSION_CHUNK_DURATION_S", "10")
-)
+DEFAULT_CHUNK_DURATION_S = float(os.environ.get("AEON_RAW_COMPRESSION_CHUNK_DURATION_S", "10"))
 
 # Samples per block for the memory-bounded round-trip compare. Large enough to
 # keep overhead low, small enough that a 30 GB chunk never loads at once.
@@ -176,16 +174,13 @@ def verify_roundtrip(
     n_compressed = int(compressed.get_num_samples())
     if n_original != n_compressed:
         raise VerificationError(
-            f"sample-count mismatch: original {n_original} != zarr {n_compressed} "
-            f"({bin_path.name})"
+            f"sample-count mismatch: original {n_original} != zarr {n_compressed} ({bin_path.name})"
         )
 
     for block_start in range(0, n_original, _VERIFY_CHUNK_SAMPLES):
         block_end = min(block_start + _VERIFY_CHUNK_SAMPLES, n_original)
         original_block = original.get_traces(start_frame=block_start, end_frame=block_end)
-        compressed_block = compressed.get_traces(
-            start_frame=block_start, end_frame=block_end
-        )
+        compressed_block = compressed.get_traces(start_frame=block_start, end_frame=block_end)
         if not np.array_equal(original_block, compressed_block):
             raise VerificationError(
                 f"data mismatch in samples [{block_start}:{block_end}) ({bin_path.name})"

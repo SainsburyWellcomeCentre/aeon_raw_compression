@@ -19,8 +19,13 @@ _REPO = Path(__file__).parent.parent
 def test_wheel_builds_with_correct_metadata(tmp_path):
     subprocess.run(
         [
-            sys.executable, "-m", "build", "--wheel", "--no-isolation",
-            "--outdir", str(tmp_path),
+            sys.executable,
+            "-m",
+            "build",
+            "--wheel",
+            "--no-isolation",
+            "--outdir",
+            str(tmp_path),
         ],
         cwd=str(_REPO),
         check=True,
@@ -32,6 +37,6 @@ def test_wheel_builds_with_correct_metadata(tmp_path):
         meta_name = next(n for n in zf.namelist() if n.endswith(".dist-info/METADATA"))
         meta = zf.read(meta_name).decode()
 
-    assert "Requires-Dist: datajoint" in meta          # deps travel with the wheel
+    assert "Requires-Dist: datajoint" in meta  # deps travel with the wheel
     assert "License :: OSI Approved :: BSD License" in meta
     assert "SainsburyWellcomeCentre/aeon_raw_compression" in meta  # project URL

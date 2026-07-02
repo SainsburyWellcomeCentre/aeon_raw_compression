@@ -16,8 +16,14 @@ from tests.fixtures.synthetic_ephys import make_epoch
 
 def test_file_untouched_long_enough_is_eligible(tmp_path):
     make_epoch(
-        tmp_path, "AEONX1/exp", "2026-05-11T07-50-11", "NeuropixelsV2",
-        ["ProbeA"], n_chunks=2, n_channels=8, mtime_age_s=7200,
+        tmp_path,
+        "AEONX1/exp",
+        "2026-05-11T07-50-11",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=2,
+        n_channels=8,
+        mtime_age_s=7200,
     )
     recs = discover_raw_files(tmp_path / "AEONX1/exp", experiment_path="AEONX1/exp")
     # Every chunk whose mtime is old enough registers -- no successor-rule
@@ -30,24 +36,39 @@ def test_file_untouched_long_enough_is_eligible(tmp_path):
 
 def test_recently_modified_file_is_held(tmp_path):
     make_epoch(
-        tmp_path, "AEONX1/exp", "2026-05-11T07-50-11", "NeuropixelsV2",
-        ["ProbeA"], n_chunks=2, n_channels=8, mtime_age_s=0,  # just written
+        tmp_path,
+        "AEONX1/exp",
+        "2026-05-11T07-50-11",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=2,
+        n_channels=8,
+        mtime_age_s=0,  # just written
     )
     recs = discover_raw_files(
-        tmp_path / "AEONX1/exp", experiment_path="AEONX1/exp", min_age_s=3600,
+        tmp_path / "AEONX1/exp",
+        experiment_path="AEONX1/exp",
+        min_age_s=3600,
     )
     assert recs == []  # nothing is old enough -> possibly still uploading
 
 
 def test_dedup_against_already_registered(tmp_path):
     make_epoch(
-        tmp_path, "AEONX1/exp", "e", "NeuropixelsV2", ["ProbeA"],
-        n_chunks=3, finished=True,
+        tmp_path,
+        "AEONX1/exp",
+        "e",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=3,
+        finished=True,
     )
     recs = discover_raw_files(tmp_path / "AEONX1/exp", min_age_s=0)
     seen = {recs[0].file_path}
     recs2 = discover_raw_files(
-        tmp_path / "AEONX1/exp", already_registered=seen, min_age_s=0,
+        tmp_path / "AEONX1/exp",
+        already_registered=seen,
+        min_age_s=0,
     )
     assert recs[0].file_path not in {r.file_path for r in recs2}
     assert len(recs2) == len(recs) - 1
@@ -55,23 +76,41 @@ def test_dedup_against_already_registered(tmp_path):
 
 def test_scoping_to_epoch_path(tmp_path):
     make_epoch(
-        tmp_path, "AEONX1/exp", "epoch-1", "NeuropixelsV2", ["ProbeA"],
-        n_chunks=2, finished=True,
+        tmp_path,
+        "AEONX1/exp",
+        "epoch-1",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=2,
+        finished=True,
     )
     make_epoch(
-        tmp_path, "AEONX1/exp", "epoch-2", "NeuropixelsV2", ["ProbeA"],
-        n_chunks=2, finished=True,
+        tmp_path,
+        "AEONX1/exp",
+        "epoch-2",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=2,
+        finished=True,
     )
     recs = discover_raw_files(
-        tmp_path / "AEONX1/exp", epoch_path="epoch-1", min_age_s=0,
+        tmp_path / "AEONX1/exp",
+        epoch_path="epoch-1",
+        min_age_s=0,
     )
     assert {r.epoch_dir for r in recs} == {"epoch-1"}
 
 
 def test_records_carry_probe_params(tmp_path):
     make_epoch(
-        tmp_path, "AEONX1/exp", "e", "NeuropixelsV2", ["ProbeA"],
-        n_chunks=2, n_channels=8, finished=True,
+        tmp_path,
+        "AEONX1/exp",
+        "e",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=2,
+        n_channels=8,
+        finished=True,
     )
     recs = discover_raw_files(tmp_path / "AEONX1/exp", min_age_s=0)
     assert recs and all(isinstance(r, RawFileRecord) for r in recs)
@@ -87,8 +126,14 @@ def test_records_carry_probe_params(tmp_path):
 def test_disabled_probe_is_skipped(tmp_path):
     # ProbeA flagged disabled in Metadata.yml (a SpoofProbe) -> never registered.
     make_epoch(
-        tmp_path, "AEONX1/exp", "2026-05-11T07-50-11", "NeuropixelsV2",
-        ["ProbeA"], n_chunks=3, finished=True, n_channels=8,
+        tmp_path,
+        "AEONX1/exp",
+        "2026-05-11T07-50-11",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=3,
+        finished=True,
+        n_channels=8,
     )
     meta_path = tmp_path / "AEONX1/exp" / "2026-05-11T07-50-11" / "Metadata.yml"
     meta = json.loads(meta_path.read_text())
@@ -101,13 +146,16 @@ def test_disabled_probe_is_skipped(tmp_path):
 
 def test_numbering_gap_is_reported(tmp_path):
     exp = make_epoch(
-        tmp_path, "AEONX1/exp", "2026-05-11T07-50-11", "NeuropixelsV2",
-        ["ProbeA"], n_chunks=3, finished=True, n_channels=8,
+        tmp_path,
+        "AEONX1/exp",
+        "2026-05-11T07-50-11",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=3,
+        finished=True,
+        n_channels=8,
     )
-    gap = (
-        exp / "2026-05-11T07-50-11" / "NeuropixelsV2"
-        / "NeuropixelsV2_ProbeA_AmplifierData_1.bin"
-    )
+    gap = exp / "2026-05-11T07-50-11" / "NeuropixelsV2" / "NeuropixelsV2_ProbeA_AmplifierData_1.bin"
     gap.unlink()  # leaves chunks 0 and 2 -> a gap at 1
 
     msgs = []
@@ -120,8 +168,14 @@ def test_unparseable_amplifier_name_is_reported(tmp_path):
     # (here: no _ProbeX_, non-numeric index) is skipped with an anomaly, not
     # silently dropped.
     exp = make_epoch(
-        tmp_path, "AEONX1/exp", "2026-05-11T07-50-11", "NeuropixelsV2",
-        ["ProbeA"], n_chunks=2, finished=True, n_channels=8,
+        tmp_path,
+        "AEONX1/exp",
+        "2026-05-11T07-50-11",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=2,
+        finished=True,
+        n_channels=8,
     )
     dev = exp / "2026-05-11T07-50-11" / "NeuropixelsV2"
     (dev / "NeuropixelsV2_AmplifierData_junk.bin").write_bytes(b"\x00" * 16)
@@ -149,8 +203,14 @@ def test_file_path_is_not_symlink_resolved(tmp_path):
     # the symlink path so the zarr writes to the writable side, not the real
     # (read-only) target. Skipped where symlinks aren't permitted (e.g. Windows).
     make_epoch(
-        tmp_path / "real", "AEONX1/exp", "2026-05-11T07-50-11", "NeuropixelsV2",
-        ["ProbeA"], n_chunks=2, finished=True, n_channels=8,
+        tmp_path / "real",
+        "AEONX1/exp",
+        "2026-05-11T07-50-11",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=2,
+        finished=True,
+        n_channels=8,
     )
     sandbox = tmp_path / "sandbox"
     try:

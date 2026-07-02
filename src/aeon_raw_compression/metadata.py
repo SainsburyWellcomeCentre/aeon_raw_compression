@@ -118,8 +118,7 @@ def _resolve_device_key(devices: dict, device_name: str) -> str:
     if device_name in devices:  # accept the filesystem name itself as a fallback
         return device_name
     raise KeyError(
-        f"No metadata config for device {device_name!r}; "
-        f"Devices keys present: {sorted(devices)}"
+        f"No metadata config for device {device_name!r}; Devices keys present: {sorted(devices)}"
     )
 
 
@@ -127,7 +126,5 @@ def _select_config(device_meta: dict, probe_label: str) -> dict:
     """Pick ConfigurationA/B for a probe label (``...B`` -> ConfigurationB)."""
     key = "ConfigurationB" if probe_label.endswith("B") else "ConfigurationA"
     if key not in device_meta:
-        raise KeyError(
-            f"{key!r} not in device metadata (keys present: {sorted(device_meta)})"
-        )
+        raise KeyError(f"{key!r} not in device metadata (keys present: {sorted(device_meta)})")
     return device_meta[key]

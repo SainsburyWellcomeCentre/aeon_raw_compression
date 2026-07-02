@@ -17,15 +17,11 @@ from aeon_raw_compression.cli import build_trigger_row
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(
-        description="Place a raw-ephys compression discovery trigger."
-    )
+    parser = argparse.ArgumentParser(description="Place a raw-ephys compression discovery trigger.")
     parser.add_argument(
         "--experiment", required=True, help='directory in scope, e.g. "AEONX1/abcGolden01"'
     )
-    parser.add_argument(
-        "--epoch", default="", help="optional: restrict to one epoch directory"
-    )
+    parser.add_argument("--epoch", default="", help="optional: restrict to one epoch directory")
     parser.add_argument("--placed-by", required=True, help="who is placing this trigger")
     parser.add_argument(
         "--prefix", default=None, help="DataJoint prefix (default: project's configured prefix)"

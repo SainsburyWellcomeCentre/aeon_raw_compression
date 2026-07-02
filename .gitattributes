@@ -1,0 +1,9 @@
+# Normalize line endings to LF in the repo (checked-out with native endings).
+# Ends the "LF will be replaced by CRLF" churn when committing from Windows.
+* text=auto eol=lf
+
+# Explicitly binary (never touched / diffed as text).
+*.bin binary
+*.png binary
+*.zarr binary
+*.ico binary
