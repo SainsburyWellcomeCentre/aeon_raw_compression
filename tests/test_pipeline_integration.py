@@ -348,8 +348,15 @@ def test_real_chunk_full_pipeline_roundtrip_and_deletion(
     assert len(row["content_hash"]) == 64
 
     # content_hash recipe on REAL data: the zarr re-decodes to the original bytes.
-    zarr_traces = si.load(row["zarr_path"]).get_traces().tobytes()
-    assert hashlib.sha256(zarr_traces).hexdigest() == row["content_hash"]
+    # Hash block-by-block (memory-bounded) -- a full get_traces() on a real chunk
+    # would pull ~14 GB into RAM at once and OOM the job.
+    compressed = si.load(row["zarr_path"])
+    n_samples = int(compressed.get_num_samples())
+    digest = hashlib.sha256()
+    for start in range(0, n_samples, 100_000):
+        end = min(start + 100_000, n_samples)
+        digest.update(compressed.get_traces(start_frame=start, end_frame=end).tobytes())
+    assert digest.hexdigest() == row["content_hash"]
 
     # Real deletion path, exercised on the COPY (safe). Flip the source gate here
     # to prove the only data-destroying code BEFORE anyone enables it for real.
