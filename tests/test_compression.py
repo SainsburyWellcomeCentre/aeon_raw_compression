@@ -131,6 +131,33 @@ def test_compress_forwards_explicit_n_jobs(tmp_path, monkeypatch):
     assert captured["n_jobs"] == 1
 
 
+def test_compress_forwards_chunk_duration(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    captured = {}
+
+    class FakeRec:
+        def get_num_samples(self):
+            return 10
+
+        def save(self, **kwargs):
+            captured.update(kwargs)
+            Path(kwargs["folder"]).mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        "aeon_raw_compression.compression._read_binary",
+        lambda *a, **k: FakeRec(),
+    )
+    b = tmp_path / "Dev_ProbeA_AmplifierData_0.bin"
+    b.write_bytes(b"\x00" * 32)
+    z = tmp_path / "Dev_ProbeA_AmplifierData_0.zarr"
+
+    compress_to_zarr(
+        b, z, num_channels=8, sampling_frequency=30000, chunk_duration_s=10
+    )
+    assert captured["chunk_duration"] == "10s"  # forwarded as an SI duration string
+
+
 def test_compress_removes_stale_zarr(tmp_path):
     b = tmp_path / "Dev_ProbeA_AmplifierData_0.bin"
     _write_bin(b)

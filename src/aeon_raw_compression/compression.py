@@ -37,6 +37,17 @@ CODEC_NAME = "blosc-zstd-5-bitshuffle"
 # fork+BLAS crash on this HPC. Override via env for a deliberately parallel run.
 DEFAULT_N_JOBS = int(os.environ.get("AEON_RAW_COMPRESSION_N_JOBS", "1"))
 
+# Zarr chunk duration (seconds). Zarr stores each array as a directory of many
+# small chunk files; the file count per recording is ~ recording_seconds /
+# chunk_duration_s. Larger chunks => far fewer files (kinder to CephFS) at the
+# cost of a larger minimum read. This is the ONLY file-count lever we have on
+# zarr 2 (zarr-3 sharding would be better but needs SpikeInterface zarr-3
+# support, which doesn't exist yet -- see SpikeInterface issue #4014). Tune on
+# Ceph. Env-overridable.
+DEFAULT_CHUNK_DURATION_S = float(
+    os.environ.get("AEON_RAW_COMPRESSION_CHUNK_DURATION_S", "10")
+)
+
 # Samples per block for the memory-bounded round-trip compare. Large enough to
 # keep overhead low, small enough that a 30 GB chunk never loads at once.
 _VERIFY_CHUNK_SAMPLES = 100_000
@@ -83,7 +94,13 @@ def _read_binary(bin_path, num_channels, sampling_frequency, dtype):
 
 
 def compress_to_zarr(
-    bin_path, zarr_path, num_channels, sampling_frequency, dtype=NP2_DTYPE, n_jobs=DEFAULT_N_JOBS
+    bin_path,
+    zarr_path,
+    num_channels,
+    sampling_frequency,
+    dtype=NP2_DTYPE,
+    n_jobs=DEFAULT_N_JOBS,
+    chunk_duration_s=DEFAULT_CHUNK_DURATION_S,
 ) -> CompressionResult:
     """Compress ``bin_path`` to a zarr directory at ``zarr_path``.
 
@@ -91,6 +108,9 @@ def compress_to_zarr(
     killed mid-write leaves a directory but no row; ``recording.save`` errors if
     the folder exists, which would wedge the file in ``jobs.errors``). Saves
     with the explicit Blosc codec and returns size/ratio/timing metrics.
+
+    ``chunk_duration_s`` sets the zarr time-chunk size (forwarded to SI as an
+    ``"<n>s"`` duration string); larger values mean fewer on-disk chunk files.
     """
     bin_path = Path(bin_path)
     zarr_path = Path(zarr_path)
@@ -107,6 +127,7 @@ def compress_to_zarr(
         folder=str(zarr_path),
         compressor=_blosc_compressor(),
         n_jobs=int(n_jobs),
+        chunk_duration=f"{chunk_duration_s:g}s",
         progress_bar=False,
     )
     compression_time_s = time.perf_counter() - start
