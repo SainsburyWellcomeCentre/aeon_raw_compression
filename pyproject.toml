@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff"]
+dev = ["pytest", "ruff", "jupytext", "matplotlib"]
 
 [build-system]
 requires = ["hatchling"]
@@ -37,6 +37,11 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Notebook-style example scripts import within their sections (by design), so
+# allow module-level imports that aren't at the top of the file.
+"docs/examples/*" = ["E402"]
 
 [tool.pytest.ini_options]
 markers = [
