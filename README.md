@@ -8,9 +8,10 @@ hard-to-enable step to delete the originals once a recording is archival.
 
 It is decoupled from `aeon_mecha`: it reads raw files and `Metadata.yml` directly
 from the filesystem, so it works even for users who do not process their data
-through DataJoint. For v1 each user runs it on their own data and compute quota
-by adding it as a submodule next to their analysis repo; a centralized cron
-deployment is possible later from the same library.
+through DataJoint. The compressed zarr is written under a **processed** data root
+(mirroring the raw sub-path), never beside the read-only raw `.bin`. For v1 each
+user runs it on their own data and compute quota (pip-installed or as a
+submodule); a centralized cron deployment is possible later from the same library.
 
 Compression uses Blosc-zstd (`cname="zstd"`, `clevel=5`,
 `shuffle=BITSHUFFLE`, recorded as `blosc-zstd-5-bitshuffle`), which measured a
@@ -31,13 +32,13 @@ RawEphysDiscovery (Imported)        scans for COMPLETE raw files
         │
 CompressedFile (Computed)           compress to zarr AND verify round-trip (atomic)
         │
-OriginalDeletion (Computed)         delete the original — HARD-DISABLED in v1
+RawEphysFileDeletion (Computed)     delete the original — automated path DISABLED in v1
 ```
 
-A file is registered only when it is provably **complete** (its successor chunk
-exists, or — for the final chunk — the epoch is finished and the file is
-quiescent). A `CompressedFile` row exists only if compression *and* verification
-both passed.
+A file is registered only when it is provably **complete**: it has been left
+untouched for at least `AEON_RAW_COMPRESSION_MIN_AGE_S` (default 1 h), so it is
+not still being written/uploaded to Ceph. A `CompressedFile` row exists only if
+compression *and* verification both passed.
 
 Each `CompressedFile` row also stores a `content_hash` (SHA-256 of the original
 `.bin`). Verification already proves the round-trip at write time; the hash is a
@@ -87,13 +88,23 @@ files are skipped. To override the host prefix, pass `--prefix` (or
 For nightly automation on the SWC HPC and the full deployment/permissions guide,
 see [`templates/README.md`](templates/README.md).
 
-## Deletion is disabled in v1
+## Deleting originals (manual green-light in v1)
 
-`OriginalDeletion` is hard-disabled in source (`DELETION_ENABLED = False` in
-`pipeline.py`). There is no CLI flag or config to enable it — turning it on is a
-deliberate, version-controlled code change, made only once the team decides and a
-write/delete-capable raw store is in place. The discover/compress automation
-never touches that table.
+The shipped workflow is a **read-only report**, not automated deletion:
+
+```bash
+uv run python scripts/report_deletable.py --placed-by "$USER"
+```
+
+It lists every verified-compressed raw file that still exists and hasn't been
+actioned (paths + total reclaimable GB) and **writes nothing**. You then delete
+those paths manually on the recording computer — the only machine with delete
+rights on the Ceph raw store (it wrote them there via RoboCopy).
+
+Automated deletion (`RawEphysFileDeletion.make`) is hard-disabled in source
+(`DELETION_ENABLED = False` in `pipeline.py`); enabling it is a deliberate,
+version-controlled code change made only once the team decides. The
+discover/compress automation never touches that table.
 
 ## Tests
 

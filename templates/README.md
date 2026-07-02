@@ -76,61 +76,57 @@ or have the job re-submit itself at the end with
 `sbatch --begin=now+1day templates/nightly_compress.sbatch`. See the comments
 in the template for the `n_jobs` / `os.cpu_count()` SLURM trap.
 
-### Tuning the final-chunk guard
+### Tuning knobs (env vars)
 
-Discovery registers a recording's final (highest-numbered) chunk only once the
-epoch is finished and the file is quiescent. Two env vars tune that guard (the
-spec's `tune-on-ceph` open question); both default conservatively:
+- `AEON_RAW_COMPRESSION_MIN_AGE_S` — a file is eligible only once it has been
+  untouched (mtime) for this long, so a still-uploading file is never compressed.
+  Default `3600` (1 h).
+- `AEON_RAW_COMPRESSION_CHUNK_DURATION_S` — zarr time-chunk size in seconds.
+  Larger => fewer on-disk chunk files (kinder to CephFS) but larger minimum
+  reads. Default `10`.
+- `AEON_RAW_COMPRESSION_N_JOBS` — explicit SpikeInterface `n_jobs`. Default `1`
+  (safe on SLURM; never use a fractional value there).
 
-- `AEON_RAW_COMPRESSION_QUIESCENCE_S` — how long a file's size/mtime must be
-  stable before it counts as quiescent. Default `1800` (30 min).
-- `AEON_RAW_COMPRESSION_EPOCH_MAX_AGE_S` — for the rig's *last* epoch (which
-  never gets a newer sibling epoch directory), how long the epoch must be
-  completely stable before it counts as finished. Default `21600` (6 h).
-  Without this fallback the last epoch's final chunk would never register.
+### Where the compressed data lands
 
-## Storage permissions (read this before enabling deletion)
+The `.zarr` is written under the **processed** data root
+(`PROCESSED_DATA_ROOT`, default `/ceph/aeon/aeon/data/processed`), mirroring the
+raw sub-path — never beside the read-only raw `.bin`. Override the roots via
+`pipeline.activate(raw_data_root=..., processed_data_root=...)`.
 
-Two operations need **write/delete** access to the raw ephys store:
+## Deleting originals (manual green-light in v1)
 
-- **Compression** writes the `.zarr` directory *alongside* the original `.bin`.
-- **Deletion** (disabled in v1) would remove the original `.bin`.
+The shipped deletion workflow is a **read-only report**:
 
-That store is **read-only for some accounts by design** (currently the case for
-the maintainer's account). Before either can run against real data you must
-establish a permission structure -- e.g. test on a writable copy of a data file
-first, then arrange write access on the real store. Sort this out before
-relying on the nightly job.
+```bash
+uv run python scripts/report_deletable.py --placed-by "${USER}"
+```
 
-## Deletion is disabled in v1
+It lists verified-compressed raw files that still exist and haven't been
+actioned (paths + reclaimable GB) and writes nothing. Delete those paths
+manually on the **recording computer** — the only machine with delete rights on
+the Ceph raw store (it put the files there via RoboCopy).
 
-`OriginalDeletion` is hard-disabled in source (`DELETION_ENABLED = False` in
-`pipeline.py`). There is no CLI flag or config to enable it -- turning it on is
-a deliberate, version-controlled code change, made only once the team decides
-the time has come and a write/delete-capable store is in place.
+Automated deletion (`RawEphysFileDeletion.make`) is hard-disabled in source
+(`DELETION_ENABLED = False` in `pipeline.py`); enabling it is a deliberate,
+version-controlled code change, made only once the team decides.
 
 ## Deferred to the team (solve once everything else is verified)
 
-Two questions cannot be answered from a developer machine — they need real
-infrastructure access and a team decision. The rest of the library is built and
-tested so these are the *only* things left to settle before a production
-nightly run:
+Two things still need real infrastructure access and a team decision:
 
-1. **Real-Ceph write/delete under the current restrictions.** Compression writes
-   the `.zarr` beside the original and deletion removes the original; both need
-   write/delete on the raw store, which is read-only for some accounts today.
-   Until a writable location / permission structure is agreed, run only against a
-   writable **copy** (that is exactly what the real-chunk integration test does).
+1. **Real deletion mechanism / permissions.** v1 only produces the manual
+   green-light list; the recording computer deletes on Ceph. If/when we want the
+   pipeline to delete automatically, that needs delete access from wherever it
+   runs (and enabling `DELETION_ENABLED`). Compression itself no longer needs
+   raw-store write access — it writes to the processed root.
 
-2. **Completeness detection in practice** — "don't compress a file that is still
-   recording". The successor rule is a hard guarantee; the *final* chunk relies on
-   the quiescence + epoch-finished signals, whose real thresholds
-   (`AEON_RAW_COMPRESSION_QUIESCENCE_S`, `AEON_RAW_COMPRESSION_EPOCH_MAX_AGE_S`)
-   can only be tuned by watching real acquisition on Ceph. These are env vars on
-   purpose, so tuning needs no code change.
+2. **Tuning `AEON_RAW_COMPRESSION_MIN_AGE_S`.** The 1 h default guards against
+   compressing a file mid-RoboCopy; confirm it's comfortably longer than the
+   real upload settle time by watching acquisition on Ceph. (Env var, so tuning
+   needs no code change.)
 
-Both are deliberately out of scope for the current validation; raise them with
-the team once the pipeline is reviewed and working.
+Raise both with the team once the pipeline is reviewed and working.
 
 ## Running the integration tests (HPC)
 

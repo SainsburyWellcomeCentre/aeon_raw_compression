@@ -15,6 +15,37 @@ for implementation.**
 
 ---
 
+## Design updates (2026-07-02 meeting)
+
+The body below is the reviewed/approved record; these decisions supersede it in
+the noted places. They are implemented in the code.
+
+1. **Compressed output goes to the *processed* data root**, not beside the raw
+   `.bin`. The zarr is written under `PROCESSED_DATA_ROOT`
+   (default `/ceph/aeon/aeon/data/processed`, confirm on Ceph), mirroring the raw
+   sub-path. This removes the raw-store *write* requirement entirely (raw stays
+   read-only). The companion aeon_mecha read-side resolver finds the zarr by the
+   same relative path under processed and falls back to the raw `.bin` — reusing
+   aeon_mecha's existing `DirectoryType` / `get_data_directory` mechanism.
+2. **Completeness is a single "untouched for ≥1 h" rule.** The successor-rule +
+   epoch-finished + quiescence machinery is replaced by: a file is eligible once
+   its mtime is at least `AEON_RAW_COMPRESSION_MIN_AGE_S` (default 3600) in the
+   past. This guards against compressing a file still being written by the
+   recording computer's RoboCopy. Supersedes the "File completeness" section and
+   Open question #1.
+3. **`RawEphysFileDeletion` is renamed `RawEphysFileDeletion`.** v1 ships a
+   read-only `report_deletable()` / `scripts/report_deletable.py` "green-light"
+   list (verified-compressed files still present, not yet actioned); the user
+   deletes them manually on the recording computer (the only machine with Ceph
+   delete rights). The table's automated `make()` stays source-gated
+   (`DELETION_ENABLED=False`). Supersedes the deletion-mechanism text.
+4. **Explicit zarr chunk duration** (`AEON_RAW_COMPRESSION_CHUNK_DURATION_S`,
+   default 10 s) tunes the small-file count. Zarr-3 sharding would be the ideal
+   fix but needs SpikeInterface zarr-3 support, which does not exist yet
+   (SpikeInterface issue #4014); `zarr<3` is forced by SpikeInterface.
+
+---
+
 ## Problem
 
 Raw ephys acquisition files are the single largest consumer of disk space on
@@ -88,7 +119,7 @@ aeon_raw_compression/
 |-- scripts/
 |   |-- add_trigger.py        # CLI: insert a RawEphysDiscoveryTrigger (dirs + who placed it)
 |   `-- run.py                # CLI: populate discovery -> compress+verify; cron/SLURM entry point
-|                             # (no deletion CLI in v1 -- deletion is source-gated; see OriginalDeletion)
+|                             # (no deletion CLI in v1 -- deletion is source-gated; see RawEphysFileDeletion)
 |-- templates/
 |   |-- nightly_compress.sbatch   # SLURM template: compress the day's recordings overnight
 |   `-- README.md                 # setup: per-user submodule + cron/SLURM instructions
@@ -294,7 +325,7 @@ the byte-for-byte guarantee that is the whole point of verifying a raw
 archive. The trade is a slightly lower ratio in exchange for a bit-exact
 round-trip.
 
-### OriginalDeletion (Computed)
+### RawEphysFileDeletion (Computed)
 
 Deletes the original binary after compression+verification has passed.
 **Hard-disabled in source for v1** -- there is intentionally no easy way to
@@ -328,7 +359,7 @@ original_existed : bool      # True if file was present and deleted
   discover/compress automation never touches this table. There is no
   command-line flag, config option, or argument a user can pass to trigger
   deletion.
-- **Source-level gate.** Populating `OriginalDeletion` is guarded by a
+- **Source-level gate.** Populating `RawEphysFileDeletion` is guarded by a
   source-level flag (e.g. `DELETION_ENABLED = False`); while it is False the
   populate raises and refuses. Turning it on requires editing the code -- a
   deliberate, version-controlled change that is visible in git, not something
@@ -503,12 +534,12 @@ so the stored `.bin` now points at a file that is gone. The resolver always
 re-checks Ceph rather than trusting the stored path, so editing the row would
 add nothing and the insert-only record stays faithful. This relies on the
 compression-side contract that the original `.bin` is deleted only after the
-verified `.zarr` exists with the same stem (see CompressedFile / OriginalDeletion).
+verified `.zarr` exists with the same stem (see CompressedFile / RawEphysFileDeletion).
 
 **Verifying this connection is part of this work's tests:** that a compressed
 file is discovered and read correctly by the downstream pipeline. Compression
 and verification can run safely before this PR lands, but it is a hard
-prerequisite for enabling `OriginalDeletion` -- deleting a `.bin` before
+prerequisite for enabling `RawEphysFileDeletion` -- deleting a `.bin` before
 PreProcessing can read the corresponding `.zarr` would leave the sorting
 pipeline with no input.
 
@@ -557,7 +588,7 @@ quota. Typical workflow:
    your own triggers (by `placed_by`) keeps you working only on your data.
 
 Deletion of originals is not part of this workflow in v1: it is hard-disabled
-in source and has no shipped command (see OriginalDeletion).
+in source and has no shipped command (see RawEphysFileDeletion).
 
 A **SLURM nightly template** (`templates/nightly_compress.sbatch`) is part of
 the deliverable: a job scheduled overnight that compresses that day's
@@ -598,8 +629,8 @@ Requirements for unattended (nightly/cron) operation:
 - **File completeness** -- discovery registers only complete files (see File
   discovery -> File completeness). A job firing mid-recording must not pick up
   a binary that is still being written.
-- **Deletion gating** -- `OriginalDeletion` is hard-disabled in source (see
-  OriginalDeletion) and the automation never touches it. It is enabled only
+- **Deletion gating** -- `RawEphysFileDeletion` is hard-disabled in source (see
+  RawEphysFileDeletion) and the automation never touches it. It is enabled only
   by a deliberate code change, after the companion aeon_mecha PR lands
   (PreProcessing reads zarr) and the team agrees. Until then the automation
   runs discovery + compress+verify only.
@@ -627,13 +658,13 @@ auto-scale.
 ### Storage permissions
 
 Two of the pipeline's actions write to the raw ephys store: compression writes
-the zarr **alongside** the original, and `OriginalDeletion` removes the
+the zarr **alongside** the original, and `RawEphysFileDeletion` removes the
 original. Both require write/delete permission on that store -- which is not a
 given. The raw ephys store is **read-only for some accounts by design**
 (currently the case for the maintainer's account). Consequences:
 
 - **Production:** a permission structure granting the running account write
-  (for zarr output) and, later, delete (for `OriginalDeletion`) on the raw
+  (for zarr output) and, later, delete (for `RawEphysFileDeletion`) on the raw
   store must be established. This is a prerequisite before enabling deletion,
   and before any centralized run that writes into another user's data area. If
   write-on-the-raw-store is never granted, the alternative is to emit zarr to a
