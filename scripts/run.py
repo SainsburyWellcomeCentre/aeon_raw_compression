@@ -1,7 +1,7 @@
 """CLI: run discovery + compress/verify (cron / SLURM entry point).
 
 Populates ``RawEphysDiscovery`` then ``CompressedFile`` for placed triggers.
-**Never** touches ``OriginalDeletion`` -- deletion is hard-disabled in source
+**Never** touches ``RawEphysFileDeletion`` -- deletion is hard-disabled in source
 and has no CLI by design.
 
 Example (nightly):
@@ -39,7 +39,7 @@ def main(argv=None):
 
     pipeline.RawEphysDiscovery.populate(restriction, **populate_kwargs)
     pipeline.CompressedFile.populate(restriction, **populate_kwargs)
-    # Intentionally no OriginalDeletion.populate(): deletion is disabled in v1.
+    # Intentionally no RawEphysFileDeletion.populate(): deletion is disabled in v1.
 
     num_registered = len(pipeline.RawEphysDiscovery.RawEphysFile & restriction)
     num_compressed = len(pipeline.CompressedFile & restriction)

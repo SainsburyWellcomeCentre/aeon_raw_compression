@@ -18,7 +18,7 @@ def test_four_tables_exist_with_correct_base_classes():
     assert issubclass(pipeline.RawEphysDiscoveryTrigger, dj.Manual)
     assert issubclass(pipeline.RawEphysDiscovery, dj.Imported)
     assert issubclass(pipeline.CompressedFile, dj.Computed)
-    assert issubclass(pipeline.OriginalDeletion, dj.Computed)
+    assert issubclass(pipeline.RawEphysFileDeletion, dj.Computed)
 
 
 def test_part_table_is_named_raw_ephys_file():

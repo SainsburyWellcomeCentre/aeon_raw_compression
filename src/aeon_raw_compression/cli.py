@@ -32,6 +32,22 @@ def build_populate_restriction(placed_by=None):
     return {"placed_by": placed_by} if placed_by else {}
 
 
+def format_deletable_report(rows):
+    """Render the read-only "green-light" deletion report.
+
+    ``rows`` is the output of ``pipeline.report_deletable`` -- dicts with
+    ``file_path`` and ``file_size_bytes``. Returns a human-readable message
+    (paths + total reclaimable GB); the caller prints it. Nothing is deleted --
+    the user manually deletes these paths on the recording computer.
+    """
+    if not rows:
+        return "0 files eligible for deletion."
+    total_gb = sum(r["file_size_bytes"] for r in rows) / 1e9
+    lines = [f"{len(rows)} files, {total_gb:.1f} GB reclaimable:"]
+    lines += [f"  {r['file_path']}" for r in rows]
+    return "\n".join(lines)
+
+
 def summarize_run(num_registered, num_compressed):
     """Human summary of a run + whether it should be considered failed.
 

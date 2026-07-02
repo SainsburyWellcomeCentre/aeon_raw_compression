@@ -209,7 +209,7 @@ def test_deletion_refuses_while_disabled(activated_schema, tmp_path, monkeypatch
     assert pipeline.DELETION_ENABLED is False
     key = (pipeline.CompressedFile & {"placed_by": placed_by}).keys()[0]
     with pytest.raises(RuntimeError):
-        pipeline.OriginalDeletion().make(key)
+        pipeline.RawEphysFileDeletion().make(key)
 
 
 def test_failed_verification_inserts_no_row_and_removes_zarr(
@@ -272,15 +272,15 @@ def test_deletion_deletes_original_and_is_idempotent(activated_schema, tmp_path,
     # Drive it through the real populate() path (a direct make() call is blocked
     # by DataJoint's auto-populated-table insert guard). Restrict to this key.
     # 1) Original present -> deleted, recorded as original_existed=True.
-    pipeline.OriginalDeletion.populate(key, suppress_errors=False)
+    pipeline.RawEphysFileDeletion.populate(key, suppress_errors=False)
     assert not bin_path.exists()
-    assert bool((pipeline.OriginalDeletion & key).fetch1("original_existed")) is True
+    assert bool((pipeline.RawEphysFileDeletion & key).fetch1("original_existed")) is True
 
     # 2) Idempotent re-run: original already gone -> original_existed=False, no
     #    error. (Drop the tracking row so the key is unpopulated and re-runs.)
-    (pipeline.OriginalDeletion & key).delete_quick()
-    pipeline.OriginalDeletion.populate(key, suppress_errors=False)
-    assert bool((pipeline.OriginalDeletion & key).fetch1("original_existed")) is False
+    (pipeline.RawEphysFileDeletion & key).delete_quick()
+    pipeline.RawEphysFileDeletion.populate(key, suppress_errors=False)
+    assert bool((pipeline.RawEphysFileDeletion & key).fetch1("original_existed")) is False
 
 
 @pytest.mark.skipif(
@@ -302,7 +302,7 @@ def test_real_chunk_full_pipeline_roundtrip_and_deletion(
       round-trip on real 384-ch data (``checksum_match``);
     * the durable ``content_hash`` recipe holds on real data -- the zarr
       re-decodes to the original bytes without the original present;
-    * the real ``OriginalDeletion`` path removes the original (run on the COPY,
+    * the real ``RawEphysFileDeletion`` path removes the original (run on the COPY,
       so it is safe; v1 still keeps deletion source-gated).
 
     Point ``AEON_REAL_CHUNK`` at an **enabled** probe's ``*_AmplifierData_*.bin``.
@@ -390,6 +390,6 @@ def test_real_chunk_full_pipeline_roundtrip_and_deletion(
     key = (pipeline.CompressedFile & {"placed_by": placed_by}).keys()[0]
     assert dst_chunk.exists()
     monkeypatch.setattr(pipeline, "DELETION_ENABLED", True)
-    pipeline.OriginalDeletion.populate(key, suppress_errors=False)
+    pipeline.RawEphysFileDeletion.populate(key, suppress_errors=False)
     assert not dst_chunk.exists()
-    assert bool((pipeline.OriginalDeletion & key).fetch1("original_existed")) is True
+    assert bool((pipeline.RawEphysFileDeletion & key).fetch1("original_existed")) is True

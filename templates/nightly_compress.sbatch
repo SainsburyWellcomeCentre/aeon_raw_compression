@@ -43,6 +43,6 @@ export MKL_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
 
 # Discover newly-arrived complete files, compress them to zarr, and verify the
 # byte-exact round-trip. --placed-by restricts to your own triggers; drop it to
-# process every project trigger. OriginalDeletion is never populated here:
+# process every project trigger. RawEphysFileDeletion is never populated here:
 # deletion is hard-disabled in source for v1.
 uv run python scripts/run.py --placed-by "${USER}"

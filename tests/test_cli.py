@@ -9,6 +9,7 @@ import datetime
 from aeon_raw_compression.cli import (
     build_populate_restriction,
     build_trigger_row,
+    format_deletable_report,
     summarize_run,
 )
 
@@ -48,3 +49,18 @@ def test_summarize_run_flags_failures():
     assert "errored=0" in msg and failed is False
     msg, failed = summarize_run(5, 3)
     assert "errored=2" in msg and failed is True
+
+
+def test_format_deletable_report_lists_paths_and_total():
+    rows = [
+        {"file_path": "/raw/a_0.bin", "file_size_bytes": 2_000_000_000},
+        {"file_path": "/raw/b_0.bin", "file_size_bytes": 1_000_000_000},
+    ]
+    msg = format_deletable_report(rows)
+    assert "/raw/a_0.bin" in msg and "/raw/b_0.bin" in msg
+    assert "2 files" in msg
+    assert "3.0 GB" in msg  # 2 GB + 1 GB reclaimable
+
+
+def test_format_deletable_report_empty():
+    assert format_deletable_report([]) == "0 files eligible for deletion."

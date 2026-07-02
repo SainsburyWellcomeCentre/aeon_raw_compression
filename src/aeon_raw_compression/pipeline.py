@@ -8,8 +8,10 @@ Four tables, thin ``make()`` wrappers over the pure modules:
   complete raw files and registers one part row per file.
 * ``CompressedFile`` (Computed) -- compresses to zarr AND verifies the
   round-trip in one atomic step; a row exists only if both passed.
-* ``OriginalDeletion`` (Computed) -- deletes the original, **hard-disabled in
-  source** for v1 (``DELETION_ENABLED = False``).
+* ``RawEphysFileDeletion`` (Computed) -- deletes the original raw file; the
+  automated path is **hard-disabled in source** for v1
+  (``DELETION_ENABLED = False``). The shipped workflow is the read-only
+  :func:`report_deletable` green-light plus manual deletion.
 
 The schema uses **deferred activation**: importing this module does not open a
 database connection. Call :func:`activate` (with the project's own DataJoint
@@ -208,21 +210,26 @@ class CompressedFile(dj.Computed):
 
 
 @schema
-class OriginalDeletion(dj.Computed):
+class RawEphysFileDeletion(dj.Computed):
     definition = """
-    # Deletes the original binary after compression+verification. DISABLED in v1.
+    # Deletes the original raw file after compression+verification.
+    # Automated path DISABLED in v1 (DELETION_ENABLED=False); the shipped
+    # workflow is the read-only report_deletable() green-light + manual delete.
     -> CompressedFile
     ---
-    deletion_time    : datetime
-    original_existed : bool      # True if the file was present and deleted
+    deletion_time        : datetime
+    original_existed     : bool          # True if the file was present and deleted
+    deletion_mode='auto' : varchar(16)   # 'auto' (pipeline unlinked) | 'manual'
     """
 
     def make(self, key):
         if not DELETION_ENABLED:
             raise RuntimeError(
-                "OriginalDeletion is disabled (DELETION_ENABLED is False). Enabling "
-                "deletion is a deliberate, version-controlled source change and "
-                "requires a write/delete-capable raw store. Refusing to delete."
+                "RawEphysFileDeletion is disabled (DELETION_ENABLED is False). "
+                "Enabling automated deletion is a deliberate, version-controlled "
+                "source change and requires a write/delete-capable raw store. The "
+                "shipped workflow is report_deletable() + manual deletion. "
+                "Refusing to delete."
             )
 
         compressed = (CompressedFile & key).fetch1()
@@ -243,8 +250,29 @@ class OriginalDeletion(dj.Computed):
                 **key,
                 "deletion_time": datetime.datetime.now(),
                 "original_existed": original_existed,
+                "deletion_mode": "auto",
             }
         )
+
+
+def report_deletable(restriction=None):
+    """Verified-compressed raw files that still exist and are not yet actioned.
+
+    The read-only "green-light" list for manual deletion: every verified
+    ``CompressedFile`` whose raw ``.bin`` is still present and has no
+    :class:`RawEphysFileDeletion` record. Writes nothing. The recording computer
+    (the only machine with Ceph delete rights) deletes these paths manually.
+
+    Returns a list of ``{"file_path", "file_size_bytes"}`` dicts.
+    """
+    restriction = restriction or {}
+    pending = CompressedFile - RawEphysFileDeletion  # compressed, not yet actioned
+    files = (RawEphysDiscovery.RawEphysFile & pending & restriction).to_dicts()
+    return [
+        {"file_path": f["file_path"], "file_size_bytes": f["file_size_bytes"]}
+        for f in files
+        if Path(f["file_path"]).exists()
+    ]
 
 
 def activate(
