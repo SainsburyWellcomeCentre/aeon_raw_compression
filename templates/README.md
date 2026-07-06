@@ -83,7 +83,7 @@ in the template for the `n_jobs` / `os.cpu_count()` SLURM trap.
   Default `3600` (1 h).
 - `AEON_RAW_COMPRESSION_CHUNK_DURATION_S` — zarr time-chunk size in seconds.
   Larger => fewer on-disk chunk files (kinder to CephFS) but larger minimum
-  reads. Default `10`.
+  reads. Default `30` (see the file-count estimate below).
 - `AEON_RAW_COMPRESSION_N_JOBS` — explicit SpikeInterface `n_jobs`. Default `1`
   (safe on SLURM; never use a fractional value there).
 
@@ -93,6 +93,25 @@ The `.zarr` is written under the **processed** data root
 (`PROCESSED_DATA_ROOT`, default `/ceph/aeon/aeon/data/processed`), mirroring the
 raw sub-path — never beside the read-only raw `.bin`. Override the roots via
 `pipeline.activate(raw_data_root=..., processed_data_root=...)`.
+
+### Small-file count (why chunk_duration matters)
+
+Zarr stores each recording as a directory of chunk files. Measured on real
+384-ch golden data at `chunk_duration=30` (the default): **26 files per 13.8 GB
+(10-min) chunk**. Extrapolated:
+
+| chunk_duration | files / 13.8 GB chunk | ~50 TB *compressed* (one project) |
+|----------------|-----------------------|-----------------------------------|
+| 10 s           | 66                    | ~465,000 files                    |
+| **30 s (default)** | **26**            | **~183,000 files**                |
+| 60 s           | 16                    | ~113,000 files                    |
+
+30 s keeps tens of 50 TB projects in the low millions of files (spread across
+per-chunk `.zarr` directories, not one big folder) — comfortably inside CephFS
+limits — while a slice read stays ~690 MB. (SpikeInterface's per-second default
+would have been ~600 files/chunk, i.e. millions per project.) The real fix for
+extreme scale is zarr-3 sharding, which needs SpikeInterface zarr-3 support
+(not available yet; SpikeInterface issue #4014).
 
 ## Deleting originals (manual green-light in v1)
 

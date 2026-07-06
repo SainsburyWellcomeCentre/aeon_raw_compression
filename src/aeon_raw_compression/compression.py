@@ -42,9 +42,12 @@ DEFAULT_N_JOBS = int(os.environ.get("AEON_RAW_COMPRESSION_N_JOBS", "1"))
 # chunk_duration_s. Larger chunks => far fewer files (kinder to CephFS) at the
 # cost of a larger minimum read. This is the ONLY file-count lever we have on
 # zarr 2 (zarr-3 sharding would be better but needs SpikeInterface zarr-3
-# support, which doesn't exist yet -- see SpikeInterface issue #4014). Tune on
-# Ceph. Env-overridable.
-DEFAULT_CHUNK_DURATION_S = float(os.environ.get("AEON_RAW_COMPRESSION_CHUNK_DURATION_S", "10"))
+# support, which doesn't exist yet -- see SpikeInterface issue #4014).
+# Default 30 s: measured 26 files per 13.8 GB (10-min) chunk on real 384-ch data
+# (~690 MB/chunk in memory), so a 50 TB *compressed* project is ~183k files and
+# tens of such projects stay in the low millions -- well inside CephFS comfort,
+# while keeping inspection reads modest. Env-overridable; tune on Ceph.
+DEFAULT_CHUNK_DURATION_S = float(os.environ.get("AEON_RAW_COMPRESSION_CHUNK_DURATION_S", "30"))
 
 # Samples per block for the memory-bounded round-trip compare. Large enough to
 # keep overhead low, small enough that a 30 GB chunk never loads at once.

@@ -40,7 +40,10 @@ the noted places. They are implemented in the code.
    delete rights). The table's automated `make()` stays source-gated
    (`DELETION_ENABLED=False`). Supersedes the deletion-mechanism text.
 4. **Explicit zarr chunk duration** (`AEON_RAW_COMPRESSION_CHUNK_DURATION_S`,
-   default 10 s) tunes the small-file count. Zarr-3 sharding would be the ideal
+   default **30 s**) tunes the small-file count. Measured on real 384-ch data:
+   26 files per 13.8 GB (10-min) chunk at 30 s, i.e. ~183k files for a 50 TB
+   compressed project — chosen so tens of such projects stay in the low millions
+   of files, comfortably inside CephFS limits. Zarr-3 sharding would be the ideal
    fix but needs SpikeInterface zarr-3 support, which does not exist yet
    (SpikeInterface issue #4014); `zarr<3` is forced by SpikeInterface.
 
