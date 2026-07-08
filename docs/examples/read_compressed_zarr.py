@@ -37,14 +37,19 @@ import numpy as np
 # %% [markdown]
 # ## Locate a zarr
 #
-# Point `AEON_EXAMPLE_ZARR` at a real compressed chunk; otherwise we build a
-# tiny synthetic one so the notebook runs anywhere. A real zarr lives under the
-# **processed** root at the same relative path as the raw `.bin`, with a `.zarr`
-# extension — e.g. `.../processed/AEONX1/<exp>/<epoch>/<device>/<name>.zarr`.
+# Edit `ZARR_PATH` below to point at a compressed chunk. A real zarr lives under
+# the **processed** root at the same relative path as the raw `.bin`, with a
+# `.zarr` extension — e.g. `.../processed/AEONX1/<exp>/<epoch>/<device>/<name>.zarr`.
+# If the path doesn't exist we build a tiny synthetic zarr so the notebook still
+# runs anywhere.
 
 # %%
-zarr_path = os.environ.get("AEON_EXAMPLE_ZARR")
-if not zarr_path:
+# --- edit this one line ---
+ZARR_PATH = "/ceph/aeon/aeon/data/processed/AEONX1/<exp>/<epoch>/<device>/<name>.zarr"
+# --------------------------
+zarr_path = os.environ.get("AEON_EXAMPLE_ZARR", ZARR_PATH)
+if not Path(zarr_path).exists():
+    # Fall back to a tiny synthetic zarr so the notebook runs with no real data.
     from aeon_raw_compression.compression import compress_to_zarr
 
     tmp = Path(tempfile.mkdtemp())
@@ -84,6 +89,18 @@ root = zarr.open(zarr_path, mode="r")
 print("arrays:", list(root.array_keys()))
 block = root["traces_seg0"][0:1000]  # NumPy array (samples, channels)
 print("numpy block:", block.shape, block.dtype)
+
+# %% [markdown]
+# ## Quick sanity check
+#
+# A few summary stats make correctness legible without eyeballing the plot: a
+# real recording spans a range of values, so a block that is empty or all one
+# value would signal something went wrong.
+
+# %%
+print("block:", block.shape, block.dtype)
+print("min/max/mean:", block.min(), block.max(), float(block.mean()))
+assert block.size and block.min() != block.max()  # not degenerate / all-constant
 
 # %%
 fig, ax = plt.subplots()
