@@ -169,6 +169,60 @@ def test_cli_run_main_adds_trigger_and_populates(activated_schema, tmp_path, mon
     assert len(pipeline.CompressedFile & {"placed_by": "cli_user"}) == 2
 
 
+def test_pipeline_rejects_unfaithful_archive(activated_schema, tmp_path, monkeypatch):
+    """A zarr that does NOT decode byte-exact must be rejected end-to-end.
+
+    Make the *pipeline's* compress step emit an unfaithful archive (compress
+    normally, then flip one stored value). The real ``verify_roundtrip`` inside
+    ``CompressedFile.make`` must catch it, remove the untrusted zarr, and insert
+    no row -- the failure is recorded in the jobs table (retriable), the raw is
+    never touched. This is the decompression-checksum-fails scenario.
+    """
+    import datetime
+    from pathlib import Path
+
+    import zarr
+
+    from aeon_raw_compression import compression
+
+    _reset_all()
+    raw, proc = _use_roots(monkeypatch, tmp_path)
+    experiment_dir = make_epoch(
+        raw,
+        "AEONX1/unfaithful",
+        "2026-05-11T15-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=3,
+        finished=True,
+        n_channels=8,
+    )
+    _place_trigger(experiment_dir, "bad_user", datetime.datetime(2026, 6, 26, 8, 0, 0))
+    pipeline.RawEphysDiscovery.populate({"placed_by": "bad_user"})
+
+    real_compress = compression.compress_to_zarr
+
+    def _faithless(bin_path, zarr_path, *a, **k):
+        result = real_compress(bin_path, zarr_path, *a, **k)
+        root = zarr.open(str(zarr_path), mode="a")  # flip one stored value
+        root["traces_seg0"][0, 0] = (int(root["traces_seg0"][0, 0]) + 1) % 4000
+        return result
+
+    # pipeline.make() calls compress_to_zarr via the pipeline-module binding.
+    monkeypatch.setattr(pipeline, "compress_to_zarr", _faithless)
+
+    # Real path: reserve_jobs so the failure is recorded; suppress so populate returns.
+    pipeline.CompressedFile.populate(
+        {"placed_by": "bad_user"}, reserve_jobs=True, suppress_errors=True
+    )
+
+    # Core guarantees: no row inserted, untrusted zarr removed.
+    assert len(pipeline.CompressedFile & {"placed_by": "bad_user"}) == 0
+    assert list(Path(proc).rglob("*.zarr")) == []
+    # The failure is recorded (retriable), not silently swallowed.
+    assert len(pipeline.CompressedFile.jobs.errors) >= 1
+
+
 def test_discovery_registers_complete_files(activated_schema, tmp_path):
     import datetime
 
