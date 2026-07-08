@@ -12,8 +12,8 @@ from aeon_mecha: it reads raw files and `Metadata.yml` directly.
 
 ## Setup
 
-This is a small standalone library, intended to be added as a git submodule
-next to your analysis repo (alongside aeon_mecha) for the per-user model.
+This is a small standalone library, added to your analysis repo (per-user
+model) either by `pip install`ing it or as a git submodule next to aeon_mecha.
 
 - Use `uv` for the environment. Most commands need the `dev` extra.
 - It connects to the `aeondj` database server, which needs the `cryptography`
@@ -66,5 +66,7 @@ skipped). A nightly SLURM template lives in `templates/`.
   write/delete-capable raw store — there is intentionally no CLI/config flag.
 - **Set `n_jobs` explicitly** (never auto/fractional on SLURM — `os.cpu_count()`
   reports all node cores, not the cgroup allocation). Tuning env vars:
-  `AEON_RAW_COMPRESSION_N_JOBS`, `AEON_RAW_COMPRESSION_QUIESCENCE_S`,
-  `AEON_RAW_COMPRESSION_EPOCH_MAX_AGE_S`.
+  `AEON_RAW_COMPRESSION_N_JOBS` (default 1); `AEON_RAW_COMPRESSION_CHUNK_DURATION_S`
+  (default 30 — zarr time-chunk size, controls the CephFS small-file count);
+  `AEON_RAW_COMPRESSION_MIN_AGE_S` (default 3600 — a file is eligible only once
+  untouched for this long, so a still-uploading file is never compressed).
