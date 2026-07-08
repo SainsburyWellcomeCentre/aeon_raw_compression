@@ -144,6 +144,31 @@ def test_api_direct_table_populate_matches_run(activated_schema, tmp_path, monke
     assert arc.report_deletable()  # non-empty green-light list
 
 
+def test_cli_run_main_adds_trigger_and_populates(activated_schema, tmp_path, monkeypatch):
+    # The nightly CLI entry point: --experiment adds a trigger, then run()
+    # populates everything (exercised end-to-end, not just its pure helpers).
+    from aeon_raw_compression import cli
+
+    _reset_all()
+    raw, proc = _use_roots(monkeypatch, tmp_path)
+    make_epoch(
+        raw,
+        "AEONX1/cli_run",
+        "2026-05-11T10-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=2,
+        finished=True,
+        n_channels=8,
+    )
+    prefix = os.environ.get("AEON_TEST_PREFIX", "test_rawcomp")
+    code = cli.run_main(
+        ["--experiment", str(raw / "AEONX1/cli_run"), "--placed-by", "cli_user", "--prefix", prefix]
+    )
+    assert code in (0, None)
+    assert len(pipeline.CompressedFile & {"placed_by": "cli_user"}) == 2
+
+
 def test_discovery_registers_complete_files(activated_schema, tmp_path):
     import datetime
 
