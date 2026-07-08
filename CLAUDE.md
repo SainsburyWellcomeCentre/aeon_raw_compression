@@ -24,12 +24,22 @@ next to your analysis repo (alongside aeon_mecha) for the per-user model.
 
 ## Running it
 
-1. Place a discovery trigger scoping a directory to scan:
-   `uv run python scripts/add_trigger.py --experiment "AEONX1/<exp>" --placed-by "$USER"`
-2. Discover complete files, compress to zarr, and verify the round-trip:
-   `uv run python scripts/run.py --placed-by "$USER"`
+Import-first (`import aeon_raw_compression as arc`): `arc.activate()`,
+`arc.add_trigger("AEONX1/<exp>", placed_by="$USER")`, then either populate the
+tables directly (`arc.RawEphysDiscovery.populate()`,
+`arc.CompressedFile.populate()`) or the convenience `arc.run()`;
+`arc.report_deletable()` lists what's safe to delete. See
+`docs/examples/run_compression.py`.
 
-Both steps are idempotent (already-registered / already-compressed files are
+The same actions exist as thin CLI shims (`scripts/*.py`) for cron/SLURM:
+
+1. Scope + discover + compress + verify in one command:
+   `uv run python scripts/run.py --experiment "AEONX1/<exp>" --placed-by "$USER"`
+2. Or place a trigger then process it:
+   `uv run python scripts/add_trigger.py --experiment "AEONX1/<exp>" --placed-by "$USER"`
+   then `uv run python scripts/run.py`
+
+All steps are idempotent (already-registered / already-compressed files are
 skipped). A nightly SLURM template lives in `templates/`.
 
 ## Tests
