@@ -41,8 +41,12 @@ export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
 export OPENBLAS_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
 export MKL_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
 
-# Discover newly-arrived complete files, compress them to zarr, and verify the
-# byte-exact round-trip. --placed-by restricts to your own triggers; drop it to
-# process every project trigger. RawEphysFileDeletion is never populated here:
-# deletion is hard-disabled in source for v1.
-uv run python scripts/run.py --placed-by "${USER}"
+# Scope tonight's experiment, then discover newly-arrived complete files,
+# compress them to zarr, and verify the byte-exact round-trip -- all in one
+# command. --experiment places the trigger (--placed-by records who), then run
+# populates RawEphysDiscovery + CompressedFile. Edit AEON_EXPERIMENT to the
+# directory you want compressed nightly. RawEphysFileDeletion is never populated
+# here: deletion is hard-disabled in source for v1.
+uv run python scripts/run.py \
+    --experiment "${AEON_EXPERIMENT:-AEONX1/<your-experiment>}" \
+    --placed-by "${USER}"

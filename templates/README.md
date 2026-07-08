@@ -55,26 +55,40 @@ A relative `--experiment` is resolved against the Ceph raw-data root
 ## 4. Run discovery + compression
 
 ```bash
-uv run python scripts/run.py --placed-by "$USER"
+uv run python scripts/run.py
 ```
 
 This populates `RawEphysDiscovery` (registers complete files) then
 `CompressedFile` (compress to zarr **and** verify the byte-exact round-trip, in
-one atomic step). Re-running is safe and idempotent -- already-registered and
-already-compressed files are skipped.
+one atomic step) for every placed trigger. Re-running is safe and idempotent --
+already-registered and already-compressed files are skipped.
+
+Steps 3 and 4 can also be a **single command** -- `--experiment` places the
+trigger first, then runs (this is what the nightly template uses):
+
+```bash
+uv run python scripts/run.py --experiment "AEONX1/abcGolden01" --placed-by "$USER"
+```
+
+All three actions are equally available from Python
+(`import aeon_raw_compression as arc`): `arc.add_trigger(...)`,
+`arc.RawEphysDiscovery.populate()` / `arc.CompressedFile.populate()` (or the
+convenience `arc.run()`), and `arc.report_deletable()`.
 
 ## 5. Schedule the nightly job
 
 ```bash
 mkdir -p logs
-sbatch templates/nightly_compress.sbatch
+# Set the experiment to compress nightly (or edit the default in the template):
+AEON_EXPERIMENT="AEONX1/abcGolden01" sbatch templates/nightly_compress.sbatch
 ```
 
-The template is CPU-only (no GPU). To run every night, either add a `crontab`
-entry on a submit host that calls `sbatch templates/nightly_compress.sbatch`,
-or have the job re-submit itself at the end with
-`sbatch --begin=now+1day templates/nightly_compress.sbatch`. See the comments
-in the template for the `n_jobs` / `os.cpu_count()` SLURM trap.
+The template places a trigger for `AEON_EXPERIMENT` and then runs discovery +
+compression in one job. It is CPU-only (no GPU). To run every night, either add
+a `crontab` entry on a submit host that calls `sbatch
+templates/nightly_compress.sbatch`, or have the job re-submit itself at the end
+with `sbatch --begin=now+1day templates/nightly_compress.sbatch`. See the
+comments in the template for the `n_jobs` / `os.cpu_count()` SLURM trap.
 
 ### Tuning knobs (env vars)
 
@@ -118,7 +132,7 @@ extreme scale is zarr-3 sharding, which needs SpikeInterface zarr-3 support
 The shipped deletion workflow is a **read-only report**:
 
 ```bash
-uv run python scripts/report_deletable.py --placed-by "${USER}"
+uv run python scripts/report_deletable.py
 ```
 
 It lists verified-compressed raw files that still exist and haven't been
