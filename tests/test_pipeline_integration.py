@@ -78,6 +78,72 @@ def _use_roots(monkeypatch, tmp_path):
     return raw, proc
 
 
+def _reset_all():
+    """Empty every table so whole-schema counts are clean for this test.
+
+    ``run()``/``RunSummary`` and ``report_deletable()`` (with no restriction)
+    intentionally cover the WHOLE schema -- the per-user v1 semantics, where one
+    user's data lives under one prefix. The module-scoped ``activated_schema``
+    accumulates rows across tests (the other tests isolate via ``placed_by``), so
+    a test asserting on whole-schema totals must start from empty. Delete
+    child-first; ``delete_quick`` does not cascade.
+    """
+    for table in (
+        pipeline.RawEphysFileDeletion,
+        pipeline.CompressedFile,
+        pipeline.RawEphysDiscovery.RawEphysFile,
+        pipeline.RawEphysDiscovery,
+        pipeline.RawEphysDiscoveryTrigger,
+    ):
+        table.delete_quick()
+
+
+def test_api_add_trigger_then_run_populates_all(activated_schema, tmp_path, monkeypatch):
+    # Import-first path: add a trigger, then run() populates discovery + compress.
+    import aeon_raw_compression as arc
+
+    _reset_all()
+    raw, proc = _use_roots(monkeypatch, tmp_path)
+    make_epoch(
+        raw,
+        "AEONX1/api_run",
+        "2026-05-11T08-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=3,
+        finished=True,
+        n_channels=8,
+    )
+    arc.add_trigger(str(raw / "AEONX1/api_run"), placed_by="api_user")
+    summary = arc.run()
+    assert summary.num_registered == 3 and summary.num_compressed == 3
+    assert summary.num_errored == 0
+    assert "compressed=3" in str(summary)
+
+
+def test_api_direct_table_populate_matches_run(activated_schema, tmp_path, monkeypatch):
+    # Option A path: populate the exposed tables directly after add_trigger.
+    import aeon_raw_compression as arc
+
+    _reset_all()
+    raw, proc = _use_roots(monkeypatch, tmp_path)
+    make_epoch(
+        raw,
+        "AEONX1/api_direct",
+        "2026-05-11T09-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=2,
+        finished=True,
+        n_channels=8,
+    )
+    arc.add_trigger(str(raw / "AEONX1/api_direct"), placed_by="direct_user")
+    arc.RawEphysDiscovery.populate()
+    arc.CompressedFile.populate()
+    assert len(arc.CompressedFile & {"placed_by": "direct_user"}) == 2
+    assert arc.report_deletable()  # non-empty green-light list
+
+
 def test_discovery_registers_complete_files(activated_schema, tmp_path):
     import datetime
 
