@@ -18,9 +18,11 @@ channel map lives in a separate probeinterface JSON
 the reliable source. If a config block *does* carry an explicit field, it wins
 (synthetic test fixtures use this so small recordings round-trip).
 
-TODO(confirm-on-ceph): the exact field name (if any) for channel count in real
-Metadata.yml, and the V2Beta active-config key. Covered by the Task 8
-integration test against real data.
+Confirmed on real V2 golden data: real ``Metadata.yml`` carries no channel-count
+field, so the NP2 constant (384) is used and the round-trip is byte-exact. The
+V2Beta active-config key has no test data to confirm against; the candidate list
+in ``_DEVICE_KEY_CANDIDATES`` is a best guess that fails loudly (``KeyError`` ->
+the file is flagged/skipped, never silently miscompressed) if it is ever wrong.
 """
 
 import json
@@ -35,8 +37,8 @@ NP2_DTYPE = "uint16"
 # Filesystem device-dir name -> Metadata.yml "Devices" key candidates, in
 # preference order. The filesystem uses "NeuropixelsV2"; metadata uses
 # "NeuropixelsV2e" (see knowledge/ceph-ephys-file-structure.md). The V2Beta
-# active-config key is unconfirmed -- try the Beta-specific key first, then the
-# V2 key. TODO(confirm-on-ceph).
+# active-config key has no test data to confirm; try the Beta-specific key
+# first, then the V2 key (a wrong guess raises KeyError, never miscompresses).
 _DEVICE_KEY_CANDIDATES = {
     "NeuropixelsV2": ["NeuropixelsV2e"],
     "NeuropixelsV2Beta": ["NeuropixelsV2eBeta", "NeuropixelsV2e"],
