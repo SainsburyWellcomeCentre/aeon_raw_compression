@@ -130,22 +130,21 @@ Automated deletion (`RawEphysFileDeletion.make`) is hard-disabled in source
 (`DELETION_ENABLED = False` in `pipeline.py`); enabling it is a deliberate,
 version-controlled code change, made only once the team decides.
 
-## Deferred to the team (solve once everything else is verified)
+## Settled: deletion is manual
 
-Two things still need real infrastructure access and a team decision:
+Deletion is intentionally a **manual green-light** and stays that way: compress
+to the processed root, `report_deletable` lists what's safe to remove, and the
+recording computer (the only machine with Ceph delete rights) removes the
+originals when the team is ready. The automated `RawEphysFileDeletion.make` path
+exists but is source-gated off (`DELETION_ENABLED = False`) — reserved for a
+possible future, not part of v1.
 
-1. **Real deletion mechanism / permissions.** v1 only produces the manual
-   green-light list; the recording computer deletes on Ceph. If/when we want the
-   pipeline to delete automatically, that needs delete access from wherever it
-   runs (and enabling `DELETION_ENABLED`). Compression itself no longer needs
-   raw-store write access — it writes to the processed root.
+## One thing to confirm with the team
 
-2. **Tuning `AEON_RAW_COMPRESSION_MIN_AGE_S`.** The 1 h default guards against
-   compressing a file mid-RoboCopy; confirm it's comfortably longer than the
-   real upload settle time by watching acquisition on Ceph. (Env var, so tuning
-   needs no code change.)
-
-Raise both with the team once the pipeline is reviewed and working.
+**Tuning `AEON_RAW_COMPRESSION_MIN_AGE_S`.** The 1 h default guards against
+compressing a file mid-RoboCopy; confirm it's comfortably longer than the real
+upload settle time by watching acquisition on Ceph. It's an env var, so tuning
+needs no code change.
 
 ## Running the integration tests (HPC)
 

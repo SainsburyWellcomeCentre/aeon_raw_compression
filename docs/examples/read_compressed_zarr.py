@@ -38,7 +38,9 @@ import numpy as np
 # ## Locate a zarr
 #
 # Point `AEON_EXAMPLE_ZARR` at a real compressed chunk; otherwise we build a
-# tiny synthetic one so the notebook runs anywhere.
+# tiny synthetic one so the notebook runs anywhere. A real zarr lives under the
+# **processed** root at the same relative path as the raw `.bin`, with a `.zarr`
+# extension — e.g. `.../processed/AEONX1/<exp>/<epoch>/<device>/<name>.zarr`.
 
 # %%
 zarr_path = os.environ.get("AEON_EXAMPLE_ZARR")

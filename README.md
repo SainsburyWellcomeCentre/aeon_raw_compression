@@ -3,8 +3,10 @@
 A small, standalone [DataJoint](https://datajoint.com) library that losslessly
 compresses raw ephys acquisition files (the large `*_AmplifierData_*.bin`
 Neuropixels 2.0 binaries) to [zarr](https://zarr.dev), **verifies a byte-exact
-round-trip**, and tracks what has been compressed — with an optional, deliberately
-hard-to-enable step to delete the originals once a recording is archival.
+round-trip**, and tracks what has been compressed. Deleting the originals stays
+**manual**: the library reports which files are safe to remove, and you delete
+them from the recording computer when you're ready (see
+[Deleting originals](#deleting-originals-manual-green-light)).
 
 It is decoupled from `aeon_mecha`: it reads raw files and `Metadata.yml` directly
 from the filesystem, so it works even for users who do not process their data
@@ -54,7 +56,7 @@ change how it works — you `import aeon_raw_compression` and call
 database connection).
 
 ```bash
-# Recommended: pip install a tagged version into your project environment
+# Recommended: pip install a released tag (or @main for the latest)
 pip install "git+https://github.com/SainsburyWellcomeCentre/aeon_raw_compression@v0.1.0"
 ```
 
@@ -65,11 +67,31 @@ git submodule add https://github.com/SainsburyWellcomeCentre/aeon_raw_compressio
 git commit -m "Add aeon_raw_compression submodule"
 ```
 
+## Setup (DataJoint config)
+
 The library connects to the `aeondj` database server (the older `aeon-db` is
-legacy; connecting needs the `cryptography` package, a declared dependency). It
-reuses your project's existing `datajoint.json` + `.secrets/` and creates its
-tables under **your project's own prefix** as `<your_prefix>_aeon_raw_compression`
-(per-project tracking; there is no separate shared schema in v1).
+legacy; connecting needs the `cryptography` package, a declared dependency) and
+creates its tables under **your project's own prefix** as
+`<your_prefix>_aeon_raw_compression` (per-project tracking; no separate shared
+schema in v1).
+
+Reuse the DataJoint 2.x config your project already uses for `aeondj` — a
+`datajoint.json` plus an adjacent `.secrets/` directory (both gitignored; never
+commit them):
+
+```
+datajoint.json
+.secrets/
+    database.user        # the username, on its own
+    database.password    # the password, on its own
+```
+
+`datajoint.json` holds host/port/prefix (no `stores` block is needed — the
+tables store plain paths, not external-store blobs):
+
+```json
+{"database": {"host": "aeondj", "port": 3306, "database_prefix": "your_prefix_"}}
+```
 
 ## Quickstart
 
@@ -88,9 +110,10 @@ files are skipped. To override the host prefix, pass `--prefix` (or
 For nightly automation on the SWC HPC and the full deployment/permissions guide,
 see [`templates/README.md`](templates/README.md).
 
-## Deleting originals (manual green-light in v1)
+## Deleting originals (manual green-light)
 
-The shipped workflow is a **read-only report**, not automated deletion:
+Deletion is manual by design, and stays that way for now. The shipped workflow
+is a **read-only report**, not automated deletion:
 
 ```bash
 uv run python scripts/report_deletable.py --placed-by "$USER"
