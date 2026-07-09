@@ -101,6 +101,26 @@ def test_verify_detects_sample_count_mismatch(tmp_path):
         verify_roundtrip(b, z, num_channels=8, sampling_frequency=30000)
 
 
+def test_verify_detects_unfaithful_zarr(tmp_path):
+    # The corrupted-ARCHIVE case: the ORIGINAL is untouched but the stored zarr
+    # no longer decodes to it. (The two tests above instead corrupt the
+    # original.) This is the scenario that matters most -- a compressed file
+    # that is silently NOT a byte-exact copy -- so pin that verify catches it.
+    import zarr
+
+    b = tmp_path / "Dev_ProbeA_AmplifierData_0.bin"
+    _write_bin(b)
+    z = tmp_path / "Dev_ProbeA_AmplifierData_0.zarr"
+    compress_to_zarr(b, z, num_channels=8, sampling_frequency=30000)
+
+    # Flip a single stored value in place, making the archive unfaithful.
+    root = zarr.open(str(z), mode="a")
+    root["traces_seg0"][0, 0] = (int(root["traces_seg0"][0, 0]) + 1) % 4000
+
+    with pytest.raises(VerificationError):
+        verify_roundtrip(b, z, num_channels=8, sampling_frequency=30000)
+
+
 def test_compress_forwards_explicit_n_jobs(tmp_path, monkeypatch):
     from pathlib import Path
 

@@ -78,6 +78,151 @@ def _use_roots(monkeypatch, tmp_path):
     return raw, proc
 
 
+def _reset_all():
+    """Empty every table so whole-schema counts are clean for this test.
+
+    ``run()``/``RunSummary`` and ``report_deletable()`` (with no restriction)
+    intentionally cover the WHOLE schema -- the per-user v1 semantics, where one
+    user's data lives under one prefix. The module-scoped ``activated_schema``
+    accumulates rows across tests (the other tests isolate via ``placed_by``), so
+    a test asserting on whole-schema totals must start from empty. Delete
+    child-first; ``delete_quick`` does not cascade.
+    """
+    for table in (
+        pipeline.RawEphysFileDeletion,
+        pipeline.CompressedFile,
+        pipeline.RawEphysDiscovery.RawEphysFile,
+        pipeline.RawEphysDiscovery,
+        pipeline.RawEphysDiscoveryTrigger,
+    ):
+        table.delete_quick()
+
+
+def test_api_add_trigger_then_run_populates_all(activated_schema, tmp_path, monkeypatch):
+    # Import-first path: add a trigger, then run() populates discovery + compress.
+    import aeon_raw_compression as arc
+
+    _reset_all()
+    raw, proc = _use_roots(monkeypatch, tmp_path)
+    make_epoch(
+        raw,
+        "AEONX1/api_run",
+        "2026-05-11T08-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=3,
+        finished=True,
+        n_channels=8,
+    )
+    arc.add_trigger(str(raw / "AEONX1/api_run"), placed_by="api_user")
+    summary = arc.run()
+    assert summary.num_registered == 3 and summary.num_compressed == 3
+    assert summary.num_errored == 0
+    assert "compressed=3" in str(summary)
+
+
+def test_api_direct_table_populate_matches_run(activated_schema, tmp_path, monkeypatch):
+    # Option A path: populate the exposed tables directly after add_trigger.
+    import aeon_raw_compression as arc
+
+    _reset_all()
+    raw, proc = _use_roots(monkeypatch, tmp_path)
+    make_epoch(
+        raw,
+        "AEONX1/api_direct",
+        "2026-05-11T09-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=2,
+        finished=True,
+        n_channels=8,
+    )
+    arc.add_trigger(str(raw / "AEONX1/api_direct"), placed_by="direct_user")
+    arc.RawEphysDiscovery.populate()
+    arc.CompressedFile.populate()
+    assert len(arc.CompressedFile & {"placed_by": "direct_user"}) == 2
+    assert arc.report_deletable()  # non-empty green-light list
+
+
+def test_cli_run_main_adds_trigger_and_populates(activated_schema, tmp_path, monkeypatch):
+    # The nightly CLI entry point: --experiment adds a trigger, then run()
+    # populates everything (exercised end-to-end, not just its pure helpers).
+    from aeon_raw_compression import cli
+
+    _reset_all()
+    raw, proc = _use_roots(monkeypatch, tmp_path)
+    make_epoch(
+        raw,
+        "AEONX1/cli_run",
+        "2026-05-11T10-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=2,
+        finished=True,
+        n_channels=8,
+    )
+    prefix = os.environ.get("AEON_TEST_PREFIX", "test_rawcomp")
+    code = cli.run_main(
+        ["--experiment", str(raw / "AEONX1/cli_run"), "--placed-by", "cli_user", "--prefix", prefix]
+    )
+    assert code in (0, None)
+    assert len(pipeline.CompressedFile & {"placed_by": "cli_user"}) == 2
+
+
+def test_pipeline_rejects_unfaithful_archive(activated_schema, tmp_path, monkeypatch):
+    """A zarr that does NOT decode byte-exact must be rejected end-to-end.
+
+    Make the *pipeline's* compress step emit an unfaithful archive (compress
+    normally, then flip one stored value). The real ``verify_roundtrip`` inside
+    ``CompressedFile.make`` must catch it, remove the untrusted zarr, and insert
+    no row -- the failure is recorded in the jobs table (retriable), the raw is
+    never touched. This is the decompression-checksum-fails scenario.
+    """
+    import datetime
+    from pathlib import Path
+
+    import zarr
+
+    from aeon_raw_compression import compression
+
+    _reset_all()
+    raw, proc = _use_roots(monkeypatch, tmp_path)
+    experiment_dir = make_epoch(
+        raw,
+        "AEONX1/unfaithful",
+        "2026-05-11T15-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=3,
+        finished=True,
+        n_channels=8,
+    )
+    _place_trigger(experiment_dir, "bad_user", datetime.datetime(2026, 6, 26, 8, 0, 0))
+    pipeline.RawEphysDiscovery.populate({"placed_by": "bad_user"})
+
+    real_compress = compression.compress_to_zarr
+
+    def _faithless(bin_path, zarr_path, *a, **k):
+        result = real_compress(bin_path, zarr_path, *a, **k)
+        root = zarr.open(str(zarr_path), mode="a")  # flip one stored value
+        root["traces_seg0"][0, 0] = (int(root["traces_seg0"][0, 0]) + 1) % 4000
+        return result
+
+    # pipeline.make() calls compress_to_zarr via the pipeline-module binding.
+    monkeypatch.setattr(pipeline, "compress_to_zarr", _faithless)
+
+    # Real path: reserve_jobs so the failure is recorded; suppress so populate returns.
+    pipeline.CompressedFile.populate(
+        {"placed_by": "bad_user"}, reserve_jobs=True, suppress_errors=True
+    )
+
+    # Core guarantees: no row inserted, untrusted zarr removed.
+    assert len(pipeline.CompressedFile & {"placed_by": "bad_user"}) == 0
+    assert list(Path(proc).rglob("*.zarr")) == []
+    # The failure is recorded (retriable), not silently swallowed.
+    assert len(pipeline.CompressedFile.jobs.errors) >= 1
+
+
 def test_discovery_registers_complete_files(activated_schema, tmp_path):
     import datetime
 

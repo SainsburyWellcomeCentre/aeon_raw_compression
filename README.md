@@ -93,30 +93,63 @@ tables store plain paths, not external-store blobs):
 {"database": {"host": "aeondj", "port": 3306, "database_prefix": "your_prefix_"}}
 ```
 
-## Quickstart
+## Usage
 
-```bash
-# 1. Scope a directory to scan (nothing is scanned until a trigger is placed):
-uv run python scripts/add_trigger.py --experiment "AEONX1/<exp>" --placed-by "$USER"
+Everything is available from the top-level `import aeon_raw_compression as arc`.
+Importing opens no database connection; `activate()` binds the tables to your
+project's prefix. Nothing is scanned until you place a trigger.
 
-# 2. Discover complete files, compress them to zarr, and verify the round-trip:
-uv run python scripts/run.py --placed-by "$USER"
+```python
+import aeon_raw_compression as arc
+
+arc.activate()                                   # your project's DataJoint prefix
+arc.add_trigger("AEONX1/<exp>", placed_by="me")  # scope what to scan + who scoped it
+
+# Option A — populate the exposed tables directly (inspect / restrict / re-run each):
+arc.RawEphysDiscovery.populate()                 # register complete raw files
+arc.CompressedFile.populate()                    # compress to zarr AND verify round-trip
+
+# Option B — or the one-call convenience, equivalent to the two populates above:
+#     summary = arc.run()                        # -> "registered=26 compressed=26 errored=0"
+
+print(arc.report_deletable())                    # raw files now safe to delete (manually)
 ```
 
-Re-running is safe and idempotent — already-registered and already-compressed
-files are skipped. To override the host prefix, pass `--prefix` (or
-`pipeline.activate(prefix=...)`).
+The four tables (`RawEphysDiscoveryTrigger`, `RawEphysDiscovery`,
+`CompressedFile`, `RawEphysFileDeletion`) are exposed on `arc`, so you can query
+and populate them like any DataJoint table. Re-running is safe and idempotent —
+already-registered and already-compressed files are skipped. Pass a prefix to
+`arc.activate("your_prefix_")` to override the project default.
 
-For nightly automation on the SWC HPC and the full deployment/permissions guide,
-see [`templates/README.md`](templates/README.md).
+A copy-and-edit version of this walkthrough is at
+[`docs/examples/run_compression.py`](docs/examples/run_compression.py).
+
+### Automation (cron / SLURM)
+
+The same actions are available as thin CLI wrappers (`scripts/*.py`) for a
+nightly job — no install needed, so they work from a submodule checkout too. A
+single `run.py` call both scopes and processes the day's recordings:
+
+```bash
+# Scope + discover + compress + verify, in one command (idempotent):
+uv run python scripts/run.py --experiment "AEONX1/<exp>" --placed-by "$USER"
+
+# Or place a trigger and process it in two steps:
+uv run python scripts/add_trigger.py --experiment "AEONX1/<exp>" --placed-by "$USER"
+uv run python scripts/run.py
+```
+
+For the SWC HPC nightly template and the full deployment/permissions guide, see
+[`templates/README.md`](templates/README.md).
 
 ## Deleting originals (manual green-light)
 
 Deletion is manual by design, and stays that way for now. The shipped workflow
-is a **read-only report**, not automated deletion:
+is a **read-only report** (`arc.report_deletable()`, or the CLI below), not
+automated deletion:
 
 ```bash
-uv run python scripts/report_deletable.py --placed-by "$USER"
+uv run python scripts/report_deletable.py
 ```
 
 It lists every verified-compressed raw file that still exists and hasn't been

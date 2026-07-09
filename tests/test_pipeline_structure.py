@@ -14,6 +14,37 @@ import pytest
 from aeon_raw_compression import pipeline
 
 
+def test_package_exports_import_first_api():
+    # `import aeon_raw_compression as arc` must expose the full import-first API
+    # (functions + the four tables) so a user can do everything without reaching
+    # into submodules. Importing must still open no DB connection.
+    import aeon_raw_compression as arc
+
+    for name in (
+        "activate",
+        "add_trigger",
+        "run",
+        "report_deletable",
+        "RawEphysDiscoveryTrigger",
+        "RawEphysDiscovery",
+        "CompressedFile",
+        "RawEphysFileDeletion",
+        "DELETION_ENABLED",
+        "pipeline",
+    ):
+        assert hasattr(arc, name), name
+    assert arc.pipeline.schema.is_activated() is False  # no DB connection at import
+
+
+def test_run_summary_str_format():
+    # RunSummary's __str__ is what the nightly CLI prints; pin the shape.
+    from aeon_raw_compression.pipeline import RunSummary
+
+    assert str(RunSummary(num_registered=5, num_compressed=3, num_errored=2)) == (
+        "registered=5 compressed=3 errored=2"
+    )
+
+
 def test_four_tables_exist_with_correct_base_classes():
     assert issubclass(pipeline.RawEphysDiscoveryTrigger, dj.Manual)
     assert issubclass(pipeline.RawEphysDiscovery, dj.Imported)

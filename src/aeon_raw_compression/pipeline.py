@@ -21,6 +21,7 @@ there is no separate compression schema (per-project tracking for v1).
 
 import datetime
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 import datajoint as dj
@@ -251,6 +252,72 @@ class RawEphysFileDeletion(dj.Computed):
                 "deletion_mode": "auto",
             }
         )
+
+
+@dataclass(frozen=True)
+class RunSummary:
+    """What a :func:`run` did, for logging + a nightly-job exit code.
+
+    Counts are whole-schema totals (per-user v1: one user's data per prefix).
+    ``num_errored`` is registered-but-not-compressed files -- surfaced every run
+    so a file that keeps failing to compress stays visible until it is resolved.
+    """
+
+    num_registered: int
+    num_compressed: int
+    num_errored: int
+
+    def __str__(self):
+        return (
+            f"registered={self.num_registered} compressed={self.num_compressed} "
+            f"errored={self.num_errored}"
+        )
+
+
+def add_trigger(experiment, placed_by, epoch=""):
+    """Place a discovery trigger scoping ``experiment`` for the next run.
+
+    ``experiment`` is a directory relative to the raw-data root (e.g.
+    ``"AEONX1/abcGolden01"``) or an absolute path; ``placed_by`` records who
+    scoped the scan (part of the trigger key -- audit / future migration);
+    ``epoch`` optionally restricts the scan to one epoch directory. Requires
+    :func:`activate` to have been called.
+    """
+    RawEphysDiscoveryTrigger.insert1(
+        {
+            "trigger_time": datetime.datetime.now(),
+            "placed_by": placed_by,
+            "experiment_path": experiment,
+            "epoch_path": epoch or "",
+        }
+    )
+
+
+def run(max_calls=None):
+    """Discover + compress + verify everything triggered in this schema.
+
+    Populates ``RawEphysDiscovery`` (registers complete raw files) then
+    ``CompressedFile`` (compress to zarr AND verify a byte-exact round-trip).
+    **Never** deletes -- the convenience "populate everything" entry point. Uses
+    ``reserve_jobs=True`` (so concurrent/nightly runs coordinate) and
+    ``suppress_errors=True`` (a bad file lands in ``CompressedFile.jobs`` instead
+    of aborting the run). Returns a :class:`RunSummary`. Requires :func:`activate`
+    first. For finer control, populate the tables directly instead.
+    """
+    populate_kwargs = {"reserve_jobs": True, "suppress_errors": True}
+    if max_calls is not None:
+        populate_kwargs["max_calls"] = max_calls
+
+    RawEphysDiscovery.populate(**populate_kwargs)
+    CompressedFile.populate(**populate_kwargs)
+
+    num_registered = len(RawEphysDiscovery.RawEphysFile())
+    num_compressed = len(CompressedFile())
+    return RunSummary(
+        num_registered=num_registered,
+        num_compressed=num_compressed,
+        num_errored=max(0, num_registered - num_compressed),
+    )
 
 
 def report_deletable(restriction=None):

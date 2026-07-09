@@ -49,6 +49,42 @@ the noted places. They are implemented in the code.
 
 ---
 
+## Design updates (2026-07-08)
+
+Refinements from PR review, on top of the record below. Like the block above,
+these supersede the noted places and are implemented in the code.
+
+1. **Import-first API.** The library is used through
+   `import aeon_raw_compression as arc`, which exposes `activate`, `add_trigger`,
+   `run` (a convenience that populates discovery then compress+verify and returns
+   a small `RunSummary`), `report_deletable`, and the four tables. Users can
+   populate the tables directly (`arc.RawEphysDiscovery.populate()`,
+   `arc.CompressedFile.populate()`) or call `arc.run()`. The `scripts/*.py` CLIs
+   are now thin wrappers over this API, kept for the cron/SLURM path (the nightly
+   `run.py --experiment … --placed-by …` places a trigger *and* runs in one
+   command). Supersedes the CLI-only workflow in Deployment -> Mode 1.
+2. **`placed_by` scopes the trigger only.** `placed_by` is recorded on the
+   trigger (who scoped the scan) and is no longer used to restrict populate.
+   `run()` / `report_deletable()` operate on the whole project schema. In the
+   per-user v1 model the schema holds only that user's data, so no filter is
+   needed; a future centralized deployment scopes work by **directory** (the
+   trigger's `experiment_path`), not by `placed_by`. Supersedes Mode 1 step 2's
+   "restrict populate by `placed_by`".
+3. **pip-installable, not submodule-only.** The library can be `pip install`ed
+   (`git+https://…@<tag>`) as well as added as a submodule. `activate()` with no
+   prefix reads the project's own `datajoint.json` prefix, so the tables land
+   under `<project_prefix>_aeon_raw_compression` either way — matching the
+   installing project automatically. Supersedes "submodule" as the sole delivery
+   in Architecture -> Repo structure and Deployment -> Mode 1.
+4. **Two added `CompressedFile`/deletion fields.** `CompressedFile.content_hash`
+   (`char(64)`) stores the SHA-256 of the original `.bin` — a durable digest so a
+   zarr can be re-verified against the original bytes even after the original is
+   deleted. `RawEphysFileDeletion.deletion_mode` records how a deletion happened.
+   Table definitions below use `bigint`/`float` illustratively; the code uses the
+   DataJoint 2.x core types `int64`/`float64`/`char`.
+
+---
+
 ## Problem
 
 Raw ephys acquisition files are the single largest consumer of disk space on

@@ -12,8 +12,8 @@ from aeon_mecha: it reads raw files and `Metadata.yml` directly.
 
 ## Setup
 
-This is a small standalone library, intended to be added as a git submodule
-next to your analysis repo (alongside aeon_mecha) for the per-user model.
+This is a small standalone library, added to your analysis repo (per-user
+model) either by `pip install`ing it or as a git submodule next to aeon_mecha.
 
 - Use `uv` for the environment. Most commands need the `dev` extra.
 - It connects to the `aeondj` database server, which needs the `cryptography`
@@ -24,12 +24,22 @@ next to your analysis repo (alongside aeon_mecha) for the per-user model.
 
 ## Running it
 
-1. Place a discovery trigger scoping a directory to scan:
-   `uv run python scripts/add_trigger.py --experiment "AEONX1/<exp>" --placed-by "$USER"`
-2. Discover complete files, compress to zarr, and verify the round-trip:
-   `uv run python scripts/run.py --placed-by "$USER"`
+Import-first (`import aeon_raw_compression as arc`): `arc.activate()`,
+`arc.add_trigger("AEONX1/<exp>", placed_by="$USER")`, then either populate the
+tables directly (`arc.RawEphysDiscovery.populate()`,
+`arc.CompressedFile.populate()`) or the convenience `arc.run()`;
+`arc.report_deletable()` lists what's safe to delete. See
+`docs/examples/run_compression.py`.
 
-Both steps are idempotent (already-registered / already-compressed files are
+The same actions exist as thin CLI shims (`scripts/*.py`) for cron/SLURM:
+
+1. Scope + discover + compress + verify in one command:
+   `uv run python scripts/run.py --experiment "AEONX1/<exp>" --placed-by "$USER"`
+2. Or place a trigger then process it:
+   `uv run python scripts/add_trigger.py --experiment "AEONX1/<exp>" --placed-by "$USER"`
+   then `uv run python scripts/run.py`
+
+All steps are idempotent (already-registered / already-compressed files are
 skipped). A nightly SLURM template lives in `templates/`.
 
 ## Tests
@@ -56,5 +66,7 @@ skipped). A nightly SLURM template lives in `templates/`.
   write/delete-capable raw store — there is intentionally no CLI/config flag.
 - **Set `n_jobs` explicitly** (never auto/fractional on SLURM — `os.cpu_count()`
   reports all node cores, not the cgroup allocation). Tuning env vars:
-  `AEON_RAW_COMPRESSION_N_JOBS`, `AEON_RAW_COMPRESSION_QUIESCENCE_S`,
-  `AEON_RAW_COMPRESSION_EPOCH_MAX_AGE_S`.
+  `AEON_RAW_COMPRESSION_N_JOBS` (default 1); `AEON_RAW_COMPRESSION_CHUNK_DURATION_S`
+  (default 30 — zarr time-chunk size, controls the CephFS small-file count);
+  `AEON_RAW_COMPRESSION_MIN_AGE_S` (default 3600 — a file is eligible only once
+  untouched for this long, so a still-uploading file is never compressed).
