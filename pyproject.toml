@@ -1,0 +1,87 @@
+[project]
+name = "aeon_raw_compression"
+version = "0.1.0"
+description = "Standalone DataJoint library for lossless compression of raw ephys acquisition files"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Sainsbury Wellcome Centre" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    # Floor mirrors aeon_mecha (spikeinterface[full]>=0.104.0); the validated
+    # compression testing ran on 0.104.x. Not an exact == pin: this library is
+    # submoduled alongside aeon_mecha and an exact pin risks resolution
+    # conflicts. Codec stability is guaranteed by the explicit Blosc compressor
+    # in compression.py, not by the SI version.
+    "spikeinterface>=0.104.0",
+    "datajoint==2.2.2",
+    # zarr/numcodecs are bounded to match SpikeInterface 0.104.x's own caps
+    # (zarr<3, numcodecs<0.16). The on-disk archive format is zarr-2; zarr 3 is
+    # a breaking format/API change. SI enforces this transitively today, but the
+    # spikeinterface floor has no ceiling, so pin it here too.
+    "zarr>=2.18,<3",
+    "numcodecs<0.16",
+    "cryptography",
+    "numpy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "ruff",
+    "pre-commit",
+    "codespell",
+    "jupytext",
+    "matplotlib",
+    "build",
+    "hatchling",
+]
+
+[project.urls]
+Homepage = "https://github.com/SainsburyWellcomeCentre/aeon_raw_compression"
+"Source Code" = "https://github.com/SainsburyWellcomeCentre/aeon_raw_compression"
+"Bug Tracker" = "https://github.com/SainsburyWellcomeCentre/aeon_raw_compression/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aeon_raw_compression"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.format]
+# Keep line-length 100 (set under [tool.ruff]); format code blocks in docstrings.
+docstring-code-format = true
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Notebook-style example scripts import within their sections (by design), so
+# allow module-level imports that aren't at the top of the file.
+"docs/examples/*" = ["E402"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: requires aeondj + real data; run on the HPC, not locally",
+]
+testpaths = ["tests"]
+
+[tool.codespell]
+# Config for the codespell pre-commit hook. Skip generated/binary/vendored dirs.
+skip = ".git,*.lock,uv.lock,.venv,build,dist"
+check-hidden = true
+# "unparseable" is a valid variant spelling we use deliberately (probe/chunk name).
+ignore-words-list = "unparseable"

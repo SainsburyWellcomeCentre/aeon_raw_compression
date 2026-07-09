@@ -1,0 +1,28 @@
+# Run locally with: uv run --extra dev pre-commit run --all-files
+# See https://pre-commit.com. Configured for pre-commit.ci auto-updates.
+ci:
+    autoupdate_schedule: monthly
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: trailing-whitespace
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.0
+    hooks:
+      - id: ruff
+        args: [--config=pyproject.toml]
+      - id: ruff-format
+        args: [--config=pyproject.toml]
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.3.0
+    hooks:
+      - id: codespell
+        additional_dependencies: [tomli]

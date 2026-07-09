@@ -1,0 +1,191 @@
+"""Unit tests for aeon_raw_compression.compression.
+
+Exercises the lossless round-trip, the explicit codec name, a meaningful
+compression ratio, stale-zarr cleanup, and both verification-failure branches
+(sample-count and data mismatch). The mismatches are induced by changing the
+*original* after compression -- the deterministic way to drive verify's
+comparison-and-raise logic (a corrupt archive hits the same comparison branch).
+"""
+
+import numpy as np
+import pytest
+
+from aeon_raw_compression.compression import (
+    CODEC_NAME,
+    VerificationError,
+    compress_to_zarr,
+    verify_roundtrip,
+)
+
+
+def _write_bin(path, n_samples=2000, n_channels=8, seed=0):
+    rng = np.random.default_rng(seed)
+    ramp = np.arange(n_samples, dtype=np.int64)[:, None] % 4000
+    noise = rng.integers(-3, 4, size=(n_samples, n_channels))
+    data = ((ramp + noise) % 4000).astype(np.uint16)
+    data.tofile(path)
+    return data
+
+
+def test_roundtrip_is_lossless(tmp_path):
+    b = tmp_path / "Dev_ProbeA_AmplifierData_0.bin"
+    _write_bin(b)
+    z = tmp_path / "Dev_ProbeA_AmplifierData_0.zarr"
+
+    res = compress_to_zarr(b, z, num_channels=8, sampling_frequency=30000)
+    assert res.codec_name == CODEC_NAME == "blosc-zstd-5-bitshuffle"
+    assert res.num_samples == 2000
+    assert res.compressed_size_bytes > 0
+    assert res.compression_ratio > 1.0
+
+    v = verify_roundtrip(b, z, num_channels=8, sampling_frequency=30000)
+    assert v.num_samples == 2000
+    assert v.checksum_match is True
+
+
+def test_compress_records_sha256_of_original(tmp_path):
+    import hashlib
+
+    b = tmp_path / "Dev_ProbeA_AmplifierData_0.bin"
+    _write_bin(b)
+    z = tmp_path / "Dev_ProbeA_AmplifierData_0.zarr"
+
+    res = compress_to_zarr(b, z, num_channels=8, sampling_frequency=30000)
+    expected = hashlib.sha256(b.read_bytes()).hexdigest()
+    assert res.content_hash == expected
+    assert len(res.content_hash) == 64
+
+
+def test_content_hash_verifies_zarr_without_original(tmp_path):
+    # The durable-digest contract: a future tool can confirm the zarr still
+    # decodes to the original by hashing si.load(zarr).get_traces().tobytes()
+    # and comparing to content_hash -- WITHOUT the original .bin present. This
+    # guards against a future SpikeInterface change to get_traces' byte layout
+    # silently invalidating every stored content_hash with no failing test.
+    import hashlib
+
+    import spikeinterface as si
+
+    b = tmp_path / "Dev_ProbeA_AmplifierData_0.bin"
+    _write_bin(b)
+    z = tmp_path / "Dev_ProbeA_AmplifierData_0.zarr"
+    res = compress_to_zarr(b, z, num_channels=8, sampling_frequency=30000)
+
+    reconstructed = si.load(str(z)).get_traces().tobytes()
+    assert hashlib.sha256(reconstructed).hexdigest() == res.content_hash
+
+
+def test_verify_detects_data_mismatch(tmp_path):
+    b = tmp_path / "Dev_ProbeA_AmplifierData_0.bin"
+    data = _write_bin(b)
+    z = tmp_path / "Dev_ProbeA_AmplifierData_0.zarr"
+    compress_to_zarr(b, z, num_channels=8, sampling_frequency=30000)
+
+    corrupt = data.copy()
+    corrupt[1000] = (corrupt[1000] + 1) % 4000  # same size, different values
+    corrupt.astype(np.uint16).tofile(b)
+
+    with pytest.raises(VerificationError):
+        verify_roundtrip(b, z, num_channels=8, sampling_frequency=30000)
+
+
+def test_verify_detects_sample_count_mismatch(tmp_path):
+    b = tmp_path / "Dev_ProbeA_AmplifierData_0.bin"
+    data = _write_bin(b)
+    z = tmp_path / "Dev_ProbeA_AmplifierData_0.zarr"
+    compress_to_zarr(b, z, num_channels=8, sampling_frequency=30000)
+
+    data[:-100].astype(np.uint16).tofile(b)  # drop 100 samples
+
+    with pytest.raises(VerificationError):
+        verify_roundtrip(b, z, num_channels=8, sampling_frequency=30000)
+
+
+def test_verify_detects_unfaithful_zarr(tmp_path):
+    # The corrupted-ARCHIVE case: the ORIGINAL is untouched but the stored zarr
+    # no longer decodes to it. (The two tests above instead corrupt the
+    # original.) This is the scenario that matters most -- a compressed file
+    # that is silently NOT a byte-exact copy -- so pin that verify catches it.
+    import zarr
+
+    b = tmp_path / "Dev_ProbeA_AmplifierData_0.bin"
+    _write_bin(b)
+    z = tmp_path / "Dev_ProbeA_AmplifierData_0.zarr"
+    compress_to_zarr(b, z, num_channels=8, sampling_frequency=30000)
+
+    # Flip a single stored value in place, making the archive unfaithful.
+    root = zarr.open(str(z), mode="a")
+    root["traces_seg0"][0, 0] = (int(root["traces_seg0"][0, 0]) + 1) % 4000
+
+    with pytest.raises(VerificationError):
+        verify_roundtrip(b, z, num_channels=8, sampling_frequency=30000)
+
+
+def test_compress_forwards_explicit_n_jobs(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    captured = {}
+
+    class FakeRec:
+        def get_num_samples(self):
+            return 10
+
+        def save(self, **kwargs):
+            captured.update(kwargs)
+            Path(kwargs["folder"]).mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        "aeon_raw_compression.compression._read_binary",
+        lambda *a, **k: FakeRec(),
+    )
+    b = tmp_path / "Dev_ProbeA_AmplifierData_0.bin"
+    b.write_bytes(b"\x00" * 32)
+    z = tmp_path / "Dev_ProbeA_AmplifierData_0.zarr"
+
+    compress_to_zarr(b, z, num_channels=8, sampling_frequency=30000, n_jobs=1)
+    assert captured["n_jobs"] == 1
+
+    # Also confirm the DEFAULT path forwards an explicit integer (not None/auto).
+    captured.clear()
+    compress_to_zarr(b, z, num_channels=8, sampling_frequency=30000)
+    assert captured["n_jobs"] == 1
+
+
+def test_compress_forwards_chunk_duration(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    captured = {}
+
+    class FakeRec:
+        def get_num_samples(self):
+            return 10
+
+        def save(self, **kwargs):
+            captured.update(kwargs)
+            Path(kwargs["folder"]).mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        "aeon_raw_compression.compression._read_binary",
+        lambda *a, **k: FakeRec(),
+    )
+    b = tmp_path / "Dev_ProbeA_AmplifierData_0.bin"
+    b.write_bytes(b"\x00" * 32)
+    z = tmp_path / "Dev_ProbeA_AmplifierData_0.zarr"
+
+    compress_to_zarr(b, z, num_channels=8, sampling_frequency=30000, chunk_duration_s=10)
+    assert captured["chunk_duration"] == "10s"  # forwarded as an SI duration string
+
+
+def test_compress_removes_stale_zarr(tmp_path):
+    b = tmp_path / "Dev_ProbeA_AmplifierData_0.bin"
+    _write_bin(b)
+    z = tmp_path / "Dev_ProbeA_AmplifierData_0.zarr"
+    z.mkdir()
+    (z / "junk.txt").write_text("stale partial write from a killed run")
+
+    res = compress_to_zarr(b, z, num_channels=8, sampling_frequency=30000)
+    assert not (z / "junk.txt").exists()
+    assert res.num_samples == 2000
+
+    v = verify_roundtrip(b, z, num_channels=8, sampling_frequency=30000)
+    assert v.checksum_match is True

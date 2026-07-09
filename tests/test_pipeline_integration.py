@@ -1,0 +1,594 @@
+"""HPC integration tests for the DataJoint layer (run against ``aeondj``).
+
+All tests here are marked ``integration`` and are **skipped in the default local
+run** (`pytest -m "not integration"`). Run them on the SWC HPC with `aeondj`
+configured (datajoint.json + .secrets), against a throwaway prefix:
+
+    module load uv
+    AEON_TEST_PREFIX=test_rawcomp uv run pytest -m integration
+
+The schema (`<prefix>_aeon_raw_compression`) is created at module start and
+dropped at the end. Synthetic data is written to pytest's ``tmp_path`` (a
+writable scratch dir), so most tests need no real Ceph data or write access to
+the raw store. The final test drives the WHOLE pipeline on a *copy* of one real
+chunk and runs only when ``AEON_REAL_CHUNK`` points at a real
+``*_AmplifierData_*.bin`` (compute node, roomy ``--basetemp``).
+
+Completeness note: ``RawEphysDiscovery.make`` uses discovery's default rule --
+a file registers once its mtime is at least 1 h in the past. The synthetic
+fixture backdates chunk mtimes (``make_epoch`` default), so **all** chunks are
+eligible and register (there is no successor-rule exclusion of the final chunk).
+
+Root note: compress writes the zarr under ``PROCESSED_DATA_ROOT``, re-rooted from
+``RAW_DATA_ROOT``. Tests that compress build the epoch under a ``raw`` root and
+point both roots at tmp dirs via ``_use_roots`` so ``_processed_zarr_path`` can
+map raw -> processed.
+"""
+
+import os
+
+import pytest
+
+from aeon_raw_compression import pipeline
+from tests.fixtures.synthetic_ephys import make_epoch
+
+pytestmark = pytest.mark.integration
+
+
+@pytest.fixture(scope="module")
+def activated_schema():
+    """Activate the compression schema on a throwaway prefix; drop it after.
+
+    Drops any schema left behind by a previously *interrupted* run first (that
+    run never reached the teardown below), so the suite always starts from a
+    clean throwaway schema and hardcoded trigger keys never collide across runs.
+    """
+    import datajoint as dj
+
+    prefix = os.environ.get("AEON_TEST_PREFIX", "test_rawcomp")
+    schema_name = pipeline._schema_name(prefix)
+    dj.conn().query(f"DROP DATABASE IF EXISTS `{schema_name}`")  # clear a stale run
+    pipeline.activate(prefix)
+    yield pipeline
+    pipeline.schema.drop(prompt=False)
+
+
+def _place_trigger(experiment_dir, placed_by, trigger_time):
+    pipeline.RawEphysDiscoveryTrigger.insert1(
+        {
+            "trigger_time": trigger_time,
+            "placed_by": placed_by,
+            "experiment_path": str(experiment_dir),  # absolute -> used as-is
+            "epoch_path": "",
+        }
+    )
+
+
+def _use_roots(monkeypatch, tmp_path):
+    """Point RAW/PROCESSED roots at tmp dirs (for tests that compress).
+
+    Invariant: build the epoch under the returned ``raw`` dir so every registered
+    ``bin_path`` is under ``RAW_DATA_ROOT`` and ``_processed_zarr_path`` can map
+    it to the ``processed`` root. Re-rooting keys off ``RAW_DATA_ROOT``, not the
+    trigger path, so the trigger may still carry the absolute experiment dir.
+    """
+    raw, proc = tmp_path / "raw", tmp_path / "processed"
+    monkeypatch.setattr(pipeline, "RAW_DATA_ROOT", str(raw))
+    monkeypatch.setattr(pipeline, "PROCESSED_DATA_ROOT", str(proc))
+    return raw, proc
+
+
+def _reset_all():
+    """Empty every table so whole-schema counts are clean for this test.
+
+    ``run()``/``RunSummary`` and ``report_deletable()`` (with no restriction)
+    intentionally cover the WHOLE schema -- the per-user v1 semantics, where one
+    user's data lives under one prefix. The module-scoped ``activated_schema``
+    accumulates rows across tests (the other tests isolate via ``placed_by``), so
+    a test asserting on whole-schema totals must start from empty. Delete
+    child-first; ``delete_quick`` does not cascade.
+    """
+    for table in (
+        pipeline.RawEphysFileDeletion,
+        pipeline.CompressedFile,
+        pipeline.RawEphysDiscovery.RawEphysFile,
+        pipeline.RawEphysDiscovery,
+        pipeline.RawEphysDiscoveryTrigger,
+    ):
+        table.delete_quick()
+
+
+def test_api_add_trigger_then_run_populates_all(activated_schema, tmp_path, monkeypatch):
+    # Import-first path: add a trigger, then run() populates discovery + compress.
+    import aeon_raw_compression as arc
+
+    _reset_all()
+    raw, proc = _use_roots(monkeypatch, tmp_path)
+    make_epoch(
+        raw,
+        "AEONX1/api_run",
+        "2026-05-11T08-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=3,
+        finished=True,
+        n_channels=8,
+    )
+    arc.add_trigger(str(raw / "AEONX1/api_run"), placed_by="api_user")
+    summary = arc.run()
+    assert summary.num_registered == 3 and summary.num_compressed == 3
+    assert summary.num_errored == 0
+    assert "compressed=3" in str(summary)
+
+
+def test_api_direct_table_populate_matches_run(activated_schema, tmp_path, monkeypatch):
+    # Option A path: populate the exposed tables directly after add_trigger.
+    import aeon_raw_compression as arc
+
+    _reset_all()
+    raw, proc = _use_roots(monkeypatch, tmp_path)
+    make_epoch(
+        raw,
+        "AEONX1/api_direct",
+        "2026-05-11T09-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=2,
+        finished=True,
+        n_channels=8,
+    )
+    arc.add_trigger(str(raw / "AEONX1/api_direct"), placed_by="direct_user")
+    arc.RawEphysDiscovery.populate()
+    arc.CompressedFile.populate()
+    assert len(arc.CompressedFile & {"placed_by": "direct_user"}) == 2
+    assert arc.report_deletable()  # non-empty green-light list
+
+
+def test_cli_run_main_adds_trigger_and_populates(activated_schema, tmp_path, monkeypatch):
+    # The nightly CLI entry point: --experiment adds a trigger, then run()
+    # populates everything (exercised end-to-end, not just its pure helpers).
+    from aeon_raw_compression import cli
+
+    _reset_all()
+    raw, proc = _use_roots(monkeypatch, tmp_path)
+    make_epoch(
+        raw,
+        "AEONX1/cli_run",
+        "2026-05-11T10-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=2,
+        finished=True,
+        n_channels=8,
+    )
+    prefix = os.environ.get("AEON_TEST_PREFIX", "test_rawcomp")
+    code = cli.run_main(
+        ["--experiment", str(raw / "AEONX1/cli_run"), "--placed-by", "cli_user", "--prefix", prefix]
+    )
+    assert code in (0, None)
+    assert len(pipeline.CompressedFile & {"placed_by": "cli_user"}) == 2
+
+
+def test_pipeline_rejects_unfaithful_archive(activated_schema, tmp_path, monkeypatch):
+    """A zarr that does NOT decode byte-exact must be rejected end-to-end.
+
+    Make the *pipeline's* compress step emit an unfaithful archive (compress
+    normally, then flip one stored value). The real ``verify_roundtrip`` inside
+    ``CompressedFile.make`` must catch it, remove the untrusted zarr, and insert
+    no row -- the failure is recorded in the jobs table (retriable), the raw is
+    never touched. This is the decompression-checksum-fails scenario.
+    """
+    import datetime
+    from pathlib import Path
+
+    import zarr
+
+    from aeon_raw_compression import compression
+
+    _reset_all()
+    raw, proc = _use_roots(monkeypatch, tmp_path)
+    experiment_dir = make_epoch(
+        raw,
+        "AEONX1/unfaithful",
+        "2026-05-11T15-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=3,
+        finished=True,
+        n_channels=8,
+    )
+    _place_trigger(experiment_dir, "bad_user", datetime.datetime(2026, 6, 26, 8, 0, 0))
+    pipeline.RawEphysDiscovery.populate({"placed_by": "bad_user"})
+
+    real_compress = compression.compress_to_zarr
+
+    def _faithless(bin_path, zarr_path, *a, **k):
+        result = real_compress(bin_path, zarr_path, *a, **k)
+        root = zarr.open(str(zarr_path), mode="a")  # flip one stored value
+        root["traces_seg0"][0, 0] = (int(root["traces_seg0"][0, 0]) + 1) % 4000
+        return result
+
+    # pipeline.make() calls compress_to_zarr via the pipeline-module binding.
+    monkeypatch.setattr(pipeline, "compress_to_zarr", _faithless)
+
+    # Real path: reserve_jobs so the failure is recorded; suppress so populate returns.
+    pipeline.CompressedFile.populate(
+        {"placed_by": "bad_user"}, reserve_jobs=True, suppress_errors=True
+    )
+
+    # Core guarantees: no row inserted, untrusted zarr removed.
+    assert len(pipeline.CompressedFile & {"placed_by": "bad_user"}) == 0
+    assert list(Path(proc).rglob("*.zarr")) == []
+    # The failure is recorded (retriable), not silently swallowed.
+    assert len(pipeline.CompressedFile.jobs.errors) >= 1
+
+
+def test_discovery_registers_complete_files(activated_schema, tmp_path):
+    import datetime
+
+    experiment_dir = make_epoch(
+        tmp_path,
+        "AEONX1/intexp_disc",
+        "2026-05-11T07-50-11",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=3,
+        finished=True,
+        n_channels=8,
+    )
+    placed_by = "disc_user"
+    _place_trigger(experiment_dir, placed_by, datetime.datetime(2026, 6, 26, 1, 0, 0))
+
+    pipeline.RawEphysDiscovery.populate({"placed_by": placed_by})
+
+    files = pipeline.RawEphysDiscovery.RawEphysFile & {"placed_by": placed_by}
+    names = sorted(files.to_arrays("file_name"))
+    # All chunks' mtimes are backdated by the fixture, so all 3 are old enough
+    # to register (no successor-rule exclusion of the final chunk anymore).
+    assert names == [
+        "NeuropixelsV2_ProbeA_AmplifierData_0.bin",
+        "NeuropixelsV2_ProbeA_AmplifierData_1.bin",
+        "NeuropixelsV2_ProbeA_AmplifierData_2.bin",
+    ]
+    assert (pipeline.RawEphysDiscovery & {"placed_by": placed_by}).fetch1("num_files_found") == 3
+
+
+def test_compression_produces_verified_rows(activated_schema, tmp_path, monkeypatch):
+    import datetime
+
+    raw, proc = _use_roots(monkeypatch, tmp_path)
+    experiment_dir = make_epoch(
+        raw,
+        "AEONX1/intexp_comp",
+        "2026-05-11T08-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=3,
+        finished=True,
+        n_channels=8,
+    )
+    placed_by = "comp_user"
+    _place_trigger(experiment_dir, placed_by, datetime.datetime(2026, 6, 26, 2, 0, 0))
+
+    pipeline.RawEphysDiscovery.populate({"placed_by": placed_by})
+    pipeline.CompressedFile.populate({"placed_by": placed_by})
+
+    rows = (pipeline.CompressedFile & {"placed_by": placed_by}).to_dicts()
+    assert len(rows) == 3  # all chunks are old enough to register + compress
+    for row in rows:
+        assert bool(row["checksum_match"]) is True
+        assert row["codec_name"] == "blosc-zstd-5-bitshuffle"
+        # Ratio > 1 is a real-data property (~1.95x on a 13.8 GB chunk; asserted
+        # by the real-chunk test). These ~3 KB synthetic chunks are dominated by
+        # zarr's fixed metadata overhead, so here just sanity-check it computed.
+        assert row["compression_ratio"] > 0
+        assert row["num_samples"] == 200
+        assert row["zarr_path"].startswith(str(proc))  # written under processed root
+        assert row["zarr_path"].endswith(".zarr")
+
+
+def test_placed_by_restriction_registers_only_that_users_files(activated_schema, tmp_path):
+    import datetime
+
+    alice_dir = make_epoch(
+        tmp_path,
+        "AEONX1/intexp_alice",
+        "2026-05-11T09-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=2,
+        finished=True,
+        n_channels=8,
+    )
+    bob_dir = make_epoch(
+        tmp_path,
+        "AEONX1/intexp_bob",
+        "2026-05-11T10-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=2,
+        finished=True,
+        n_channels=8,
+    )
+    _place_trigger(alice_dir, "alice", datetime.datetime(2026, 6, 26, 3, 0, 0))
+    _place_trigger(bob_dir, "bob", datetime.datetime(2026, 6, 26, 3, 0, 0))
+
+    # Restrict the populate to alice's triggers only.
+    pipeline.RawEphysDiscovery.populate({"placed_by": "alice"})
+
+    assert len(pipeline.RawEphysDiscovery & {"placed_by": "alice"}) == 1
+    assert len(pipeline.RawEphysDiscovery & {"placed_by": "bob"}) == 0
+    assert len(pipeline.RawEphysDiscovery.RawEphysFile & {"placed_by": "bob"}) == 0
+
+
+def test_overlapping_triggers_do_not_double_register(activated_schema, tmp_path):
+    import datetime
+
+    experiment_dir = make_epoch(
+        tmp_path,
+        "AEONX1/intexp_overlap",
+        "2026-05-11T12-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=3,
+        finished=True,
+        n_channels=8,
+    )
+    _place_trigger(experiment_dir, "ov_user", datetime.datetime(2026, 6, 26, 5, 0, 0))
+    _place_trigger(experiment_dir, "ov_user", datetime.datetime(2026, 6, 26, 5, 0, 1))
+
+    # Both triggers cover the same dir; the second must not raise on the unique
+    # index and must not create duplicate registry rows.
+    pipeline.RawEphysDiscovery.populate({"placed_by": "ov_user"}, suppress_errors=False)
+
+    files = pipeline.RawEphysDiscovery.RawEphysFile & {"placed_by": "ov_user"}
+    paths = files.to_arrays("file_path")
+    assert len(paths) == len(set(paths))  # no duplicate physical files
+
+
+def test_discovery_persists_anomalies(activated_schema, tmp_path):
+    import datetime
+
+    experiment_dir = make_epoch(
+        tmp_path,
+        "AEONX1/intexp_anom",
+        "2026-05-11T12-30-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=3,
+        finished=True,
+        n_channels=8,
+    )
+    gap = (
+        experiment_dir
+        / "2026-05-11T12-30-00"
+        / "NeuropixelsV2"
+        / "NeuropixelsV2_ProbeA_AmplifierData_1.bin"
+    )
+    gap.unlink()  # leaves chunks 0 and 2 -> a numbering gap at 1
+    placed_by = "anom_user"
+    _place_trigger(experiment_dir, placed_by, datetime.datetime(2026, 6, 26, 5, 30, 0))
+
+    pipeline.RawEphysDiscovery.populate({"placed_by": placed_by})
+
+    row = (pipeline.RawEphysDiscovery & {"placed_by": placed_by}).fetch1()
+    assert row["num_anomalies"] >= 1
+    assert "Gap" in row["anomalies"]
+
+
+def test_deletion_refuses_while_disabled(activated_schema, tmp_path, monkeypatch):
+    import datetime
+
+    raw, proc = _use_roots(monkeypatch, tmp_path)
+    experiment_dir = make_epoch(
+        raw,
+        "AEONX1/intexp_del",
+        "2026-05-11T11-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=2,
+        finished=True,
+        n_channels=8,
+    )
+    placed_by = "del_user"
+    _place_trigger(experiment_dir, placed_by, datetime.datetime(2026, 6, 26, 4, 0, 0))
+
+    pipeline.RawEphysDiscovery.populate({"placed_by": placed_by})
+    pipeline.CompressedFile.populate({"placed_by": placed_by})
+
+    assert pipeline.DELETION_ENABLED is False
+    key = (pipeline.CompressedFile & {"placed_by": placed_by}).keys()[0]
+    with pytest.raises(RuntimeError):
+        pipeline.RawEphysFileDeletion().make(key)
+
+
+def test_failed_verification_inserts_no_row_and_removes_zarr(
+    activated_schema, tmp_path, monkeypatch
+):
+    import datetime
+    from pathlib import Path
+
+    from aeon_raw_compression import compression
+
+    raw, proc = _use_roots(monkeypatch, tmp_path)
+    experiment_dir = make_epoch(
+        raw,
+        "AEONX1/intexp_failverify",
+        "2026-05-11T13-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=3,
+        finished=True,
+        n_channels=8,
+    )
+    placed_by = "failv_user"
+    _place_trigger(experiment_dir, placed_by, datetime.datetime(2026, 6, 26, 6, 0, 0))
+    pipeline.RawEphysDiscovery.populate({"placed_by": placed_by})
+
+    def _boom(*a, **k):
+        raise compression.VerificationError("forced failure for test")
+
+    # pipeline.py imports verify_roundtrip by name, so patch it on the pipeline
+    # module (that is the bound reference make() calls).
+    monkeypatch.setattr(pipeline, "verify_roundtrip", _boom)
+
+    # Errors are suppressed -> populate returns, but no row should be inserted.
+    pipeline.CompressedFile.populate({"placed_by": placed_by}, suppress_errors=True)
+
+    assert len(pipeline.CompressedFile & {"placed_by": placed_by}) == 0
+    # The untrusted zarr must have been removed so a retry starts clean. It is
+    # written under the processed root, so check there (NOT under experiment_dir,
+    # which is under raw and would be vacuously empty of zarr).
+    assert list(Path(proc).rglob("*.zarr")) == []
+
+
+def test_deletion_deletes_original_and_is_idempotent(activated_schema, tmp_path, monkeypatch):
+    # The only data-destroying code in the system. v1 keeps it source-gated
+    # (DELETION_ENABLED=False), so exercise the real logic by flipping the flag
+    # here -- proving it BEFORE anyone enables it against real data.
+    import datetime
+    from pathlib import Path
+
+    raw, proc = _use_roots(monkeypatch, tmp_path)
+    experiment_dir = make_epoch(
+        raw,
+        "AEONX1/intexp_delok",
+        "2026-05-11T14-00-00",
+        "NeuropixelsV2",
+        ["ProbeA"],
+        n_chunks=3,
+        finished=True,
+        n_channels=8,
+    )
+    placed_by = "delok_user"
+    _place_trigger(experiment_dir, placed_by, datetime.datetime(2026, 6, 26, 7, 0, 0))
+    pipeline.RawEphysDiscovery.populate({"placed_by": placed_by})
+    pipeline.CompressedFile.populate({"placed_by": placed_by})
+
+    key = (pipeline.CompressedFile & {"placed_by": placed_by}).keys()[0]
+    bin_path = Path((pipeline.RawEphysDiscovery.RawEphysFile & key).fetch1("file_path"))
+    assert bin_path.exists()
+
+    monkeypatch.setattr(pipeline, "DELETION_ENABLED", True)
+
+    # Drive it through the real populate() path (a direct make() call is blocked
+    # by DataJoint's auto-populated-table insert guard). Restrict to this key.
+    # 1) Original present -> deleted, recorded as original_existed=True.
+    pipeline.RawEphysFileDeletion.populate(key, suppress_errors=False)
+    assert not bin_path.exists()
+    assert bool((pipeline.RawEphysFileDeletion & key).fetch1("original_existed")) is True
+
+    # 2) Idempotent re-run: original already gone -> original_existed=False, no
+    #    error. (Drop the tracking row so the key is unpopulated and re-runs.)
+    (pipeline.RawEphysFileDeletion & key).delete_quick()
+    pipeline.RawEphysFileDeletion.populate(key, suppress_errors=False)
+    assert bool((pipeline.RawEphysFileDeletion & key).fetch1("original_existed")) is False
+
+
+@pytest.mark.skipif(
+    not os.environ.get("AEON_REAL_CHUNK"),
+    reason="set AEON_REAL_CHUNK to a real *_AmplifierData_*.bin (enabled probe) to run this",
+)
+def test_real_chunk_full_pipeline_roundtrip_and_deletion(activated_schema, tmp_path, monkeypatch):
+    """The holistic real-data test: the WHOLE pipeline, on a copy of one real chunk.
+
+    This is the single artifact behind "if the tests pass, it works for everyone".
+    On a *copy* of one real chunk it drives every step through the DataJoint
+    tables and asserts each:
+
+    * discovery parses a **real** ``Metadata.yml`` (num_channels is derived from
+      it, not passed in) and registers the real chunk;
+    * ``CompressedFile.make`` compresses to zarr under the **processed** root and
+      verifies a **byte-exact** round-trip on real 384-ch data (``checksum_match``);
+    * the durable ``content_hash`` recipe holds on real data -- the zarr
+      re-decodes to the original bytes without the original present;
+    * ``report_deletable`` green-lights the file, then the real
+      ``RawEphysFileDeletion`` path removes it (run on the COPY, so it is safe;
+      v1 still keeps automated deletion source-gated).
+
+    Point ``AEON_REAL_CHUNK`` at an **enabled** probe's ``*_AmplifierData_*.bin``.
+    The copy preserves the source mtime (``shutil.copy2``), which is far older
+    than 1 h, so the chunk is immediately eligible -- no stub needed. Two things
+    are deliberately OUT OF SCOPE (deferred to the team): read-only Ceph
+    write/delete (we copy into a writable tmp dir) and tuning the real "finished
+    recording" mtime threshold.
+
+    Run on a compute node, >=4h walltime, with a roomy tmp dir
+    (``--basetemp=<scratch>`` -- the copy + zarr need ~3x the chunk size). ~30-50 min.
+    """
+    import datetime
+    import hashlib
+    import shutil
+    from pathlib import Path
+
+    import spikeinterface as si
+
+    src_chunk = Path(os.environ["AEON_REAL_CHUNK"])
+    src_device_dir = src_chunk.parent
+    src_epoch_dir = src_device_dir.parent
+    src_metadata = src_epoch_dir / "Metadata.yml"
+    assert src_metadata.exists(), f"no Metadata.yml beside {src_epoch_dir}"
+
+    # Copy under a writable raw root; the zarr then lands under the processed root.
+    raw, proc = _use_roots(monkeypatch, tmp_path)
+    experiment_dir = raw / "AEONX1" / "realcopy"
+    placed_by = "real_user"
+    # Place the trigger BEFORE the ~14 GB copy so a problem fails fast.
+    _place_trigger(experiment_dir, placed_by, datetime.datetime(2026, 7, 1, 0, 0, 0))
+
+    dst_epoch = experiment_dir / src_epoch_dir.name
+    dst_device = dst_epoch / src_device_dir.name
+    dst_device.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src_metadata, dst_epoch / "Metadata.yml")
+    dst_chunk = dst_device / src_chunk.name
+    shutil.copy2(src_chunk, dst_chunk)  # copy2 preserves the (old) mtime -> eligible
+
+    pipeline.RawEphysDiscovery.populate({"placed_by": placed_by}, suppress_errors=False)
+
+    # The one real chunk registers (its mtime is old); nothing else is present.
+    registered = (pipeline.RawEphysDiscovery.RawEphysFile & {"placed_by": placed_by}).to_dicts()
+    assert [r["file_name"] for r in registered] == [src_chunk.name]
+    # Independent check that the channel count parsed from the real Metadata.yml
+    # fits the real file (a wrong-but-consistent count would still round-trip, so
+    # checksum_match alone would not catch a metadata-parse regression).
+    n_channels = registered[0]["num_channels"]
+    assert n_channels > 0 and src_chunk.stat().st_size % (n_channels * 2) == 0
+
+    pipeline.CompressedFile.populate({"placed_by": placed_by}, suppress_errors=False)
+    row = (pipeline.CompressedFile & {"placed_by": placed_by}).fetch1()
+    assert bool(row["checksum_match"]) is True  # byte-exact round-trip on real data
+    assert row["codec_name"] == "blosc-zstd-5-bitshuffle"
+    assert row["compression_ratio"] > 1.0
+    assert row["zarr_path"].startswith(str(proc))  # written under the processed root
+    assert row["zarr_path"].endswith(".zarr")
+    assert len(row["content_hash"]) == 64
+
+    # Small-file count of the produced zarr -- feeds the terabyte extrapolation.
+    n_zarr_files = sum(1 for p in Path(row["zarr_path"]).rglob("*") if p.is_file())
+    print(f"[zarr-files] {n_zarr_files} files for {row['num_samples']} samples")
+
+    # content_hash recipe on REAL data: the zarr re-decodes to the original bytes.
+    # Hash block-by-block (memory-bounded) -- a full get_traces() on a real chunk
+    # would pull ~14 GB into RAM at once and OOM the job.
+    compressed = si.load(row["zarr_path"])
+    n_samples = int(compressed.get_num_samples())
+    digest = hashlib.sha256()
+    for start in range(0, n_samples, 100_000):
+        end = min(start + 100_000, n_samples)
+        digest.update(compressed.get_traces(start_frame=start, end_frame=end).tobytes())
+    assert digest.hexdigest() == row["content_hash"]
+
+    # The read-only green-light lists this verified, still-present file.
+    deletable = pipeline.report_deletable({"placed_by": placed_by})
+    assert [d["file_path"] for d in deletable] == [dst_chunk.as_posix()]
+
+    # Real deletion path, exercised on the COPY (safe). Flip the source gate here
+    # to prove the only data-destroying code BEFORE anyone enables it for real.
+    key = (pipeline.CompressedFile & {"placed_by": placed_by}).keys()[0]
+    assert dst_chunk.exists()
+    monkeypatch.setattr(pipeline, "DELETION_ENABLED", True)
+    pipeline.RawEphysFileDeletion.populate(key, suppress_errors=False)
+    assert not dst_chunk.exists()
+    assert bool((pipeline.RawEphysFileDeletion & key).fetch1("original_existed")) is True
+    # Once actioned + gone, it drops off the green-light list.
+    assert pipeline.report_deletable({"placed_by": placed_by}) == []
